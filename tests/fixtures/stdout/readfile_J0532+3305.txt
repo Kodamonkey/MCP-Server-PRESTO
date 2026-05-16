@@ -1,0 +1,39 @@
+﻿Assuming the data is a SIGPROC filterbank file.
+
+
+1: From the SIGPROC filterbank file '/data/57762_12049_J0532+3305_000022.fil':
+                  Telescope = Fake
+                Source Name = J0532+3305
+            Obs Date String = 2017-01-09T03:42:50
+             MJD start time = 57762.15474537036789
+                   RA J2000 = 05:31:58.0000
+             RA J2000 (deg) = 82.9916666666667 
+                  Dec J2000 = 33:08:04.0000
+            Dec J2000 (deg) = 33.1344444444444 
+                  Tracking? = True
+              Azimuth (deg) = 0
+           Zenith Ang (deg) = 0
+            Number of polns = 2 (summed)
+           Sample time (us) = 256              
+         Central freq (MHz) = 1564.25          
+          Low channel (MHz) = 1396.5           
+         High channel (MHz) = 1732             
+        Channel width (MHz) = 0.5              
+         Number of channels = 672
+      Total Bandwidth (MHz) = 336              
+                       Beam = 1 of 1
+            Beam FWHM (deg) = 1.000
+         Spectra per subint = 2400
+           Spectra per file = 234375
+      Time per subint (sec) = 0.6144
+        Time per file (sec) = 60
+            bits per sample = 8
+          Are bytes signed? = False
+          bytes per spectra = 672
+        samples per spectra = 672
+           bytes per subint = 1612800
+         samples per subint = 1612800
+                zero offset = 0                
+           Invert the band? = False
+       bytes in file header = 298
+

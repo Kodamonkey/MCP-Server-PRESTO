@@ -1,0 +1,108 @@
+﻿
+
+               Pulsar Data RFI Finder
+                 by Scott M. Ransom
+
+Assuming the data are SIGPROC filterbank format...
+Reading SIGPROC filterbank data from 1 file:
+  '/data/57762_12049_J0532+3305_000022.fil'
+
+    Number of files = 1
+       Num of polns = 2 (summed)
+  Center freq (MHz) = 1564.25
+    Num of channels = 672
+    Sample time (s) = 0.000256      
+     Spectra/subint = 2400
+   Total points (N) = 234375
+     Total time (s) = 60            
+     Clipping sigma = 6.000
+   Invert the band? = False
+          Byteswap? = False
+     Remove zeroDM? = False
+
+File  Start Spec   Samples     Padding        Start MJD
+----  ----------  ----------  ----------  --------------------
+1              0      234375           0  57762.15474537036789
+
+Analyzing data sections of length 7200 points (1.8432 sec).
+  Prime factors are:  2 2 2 2 2 3 3 5 5 
+
+Writing mask data  to '/outputs/rfi_rfifind.mask'.
+Writing  RFI data  to '/outputs/rfi_rfifind.rfi'.
+Writing statistics to '/outputs/rfi_rfifind.stats'.
+
+Massaging the data ...
+
+Amount Complete =   0%
+Amount Complete =   3%
+Amount Complete =   6%
+Amount Complete =   9%
+Amount Complete =  12%
+Amount Complete =  15%
+Amount Complete =  18%
+Amount Complete =  21%
+Amount Complete =  24%
+Amount Complete =  27%
+Amount Complete =  30%
+Amount Complete =  33%
+Amount Complete =  36%
+Amount Complete =  39%
+Amount Complete =  42%
+Amount Complete =  45%
+Amount Complete =  48%
+Amount Complete =  52%
+Amount Complete =  55%
+Amount Complete =  58%
+Amount Complete =  61%
+Amount Complete =  64%
+Amount Complete =  67%
+Amount Complete =  70%
+Amount Complete =  73%
+Amount Complete =  76%
+Amount Complete =  79%
+Amount Complete =  82%
+Amount Complete =  85%
+Amount Complete =  88%
+Amount Complete =  91%
+Amount Complete =  94%
+Amount Complete =  97%
+Amount Complete = 100%
+There are 1323 RFI instances.
+
+
+Total number of intervals in the data:  22176
+
+  Number of padded intervals:      672  ( 3.030%)
+  Number of  good  intervals:    17019  (76.745%)
+  Number of  bad   intervals:     4485  (20.225%)
+
+  Ten most significant birdies:
+#  Sigma     Period(ms)      Freq(Hz)       Number 
+----------------------------------------------------
+1  19.83     0.55166(56)     1812.7(1.8)    26450   
+2  17.93     1.1030(12)      906.62(99)     18462   
+3  17.32     22.478          44.4878        2229    
+4  16.58     0.64406(42)     1552.6(1.0)    3408    
+5  16.23     1.2881(12)      776.35(71)     4065    
+6  16.04     44.9561         22.2439        2294    
+7  16.01     22.616          44.2166        2083    
+8  15.27     11.2734         88.7044        1450    
+9  14.94     11.239          88.9757        1535    
+10 14.57     368.64          2.71267        9744    
+
+  Ten most numerous birdies:
+#  Number    Period(ms)      Freq(Hz)       Sigma 
+----------------------------------------------------
+1  26450     0.55166(56)     1812.7(1.8)    19.83   
+2  18462     1.1030(12)      906.62(99)     17.93   
+3  15283     1.00017(74)     999.83(74)     9.20    
+4  14328     0.55364(58)     1806.2(1.9)    10.58   
+5  10891     307.2           3.25521        13.24   
+6  10504     1.6667(15)      599.99(52)     13.44   
+7  10436     335.127         2.98394        13.83   
+8  9744      368.64          2.71267        14.57   
+9  8992      0.55562(41)     1799.8(1.3)    9.16    
+10 7750      283.569         3.52648        12.90   
+
+Done.
+

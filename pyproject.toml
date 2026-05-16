@@ -1,0 +1,59 @@
+[project]
+name = "presto-mcp"
+version = "0.1.0"
+description = "PRESTO-only MCP server. Typed, sandboxed, reproducible access to PRESTO radio-astronomy tools via Docker."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Sebastian Salgado" }]
+
+# Pinned: the MCP Python SDK is pre-1.0-stable on minor releases.
+# Bump deliberately; never widen the upper bound silently.
+dependencies = [
+    "mcp==1.27.1",
+    "pydantic>=2.7,<3",
+    "python-dotenv>=1.0,<2",
+    "typer>=0.12,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9",
+    "pytest-asyncio>=0.23,<1",
+    "ruff>=0.5,<1",
+]
+
+[project.scripts]
+presto-mcp = "presto_mcp.server:main"
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/presto_mcp"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "e2e: end-to-end tests requiring Docker + real PRESTO image + real data files (skipped unless --run-e2e)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM", "S"]
+ignore = [
+    "S101",  # asserts are fine in tests
+    "S603",  # subprocess: we always pass argv lists, shell=False
+    "S607",  # we resolve "docker" via PATH on purpose
+    "E501",  # long strings in tests/fixtures
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B011"]

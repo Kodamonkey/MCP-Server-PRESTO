@@ -1,0 +1,32 @@
+{
+  "tool": "presto.prepfold",
+  "description": "Mode A: fold a filterbank/PSRFITS file at a known candidate period and DM. Produces .pfd / .pfd.ps / .pfd.bestprof artifacts.",
+  "input": {
+    "input_file": "57762_12049_J0532+3305_000022.fil",
+    "period_seconds": 0.0033,
+    "dm": 56.78,
+    "output_prefix": "fold"
+  },
+  "expected_result_excerpt": {
+    "period_s": 0.0033,
+    "dm": 56.78,
+    "output_prefix": "fold",
+    "pfd_file": "fold.pfd",
+    "ps_file": "fold.pfd.ps",
+    "bestprof_file": "fold.pfd.bestprof"
+  },
+  "produced_artifacts": [
+    "fold.pfd",
+    "fold.pfd.ps",
+    "fold.pfd.bestprof"
+  ],
+  "container_argv": [
+    "prepfold",
+    "-noxwin",
+    "-p", "0.0033",
+    "-dm", "56.78",
+    "-o", "/outputs/artifacts/fold",
+    "/data/57762_12049_J0532+3305_000022.fil"
+  ],
+  "note": "Requires a real pulsar candidate (period + DM). Mode B (candidate file, accel cand) is a future tool — out of scope for the MVP."
+}

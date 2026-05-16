@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# uv
+.uv-cache/
+
+# Tests / type-checkers / linters
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE / agents (local only)
+.idea/
+.vscode/
+.cursor/
+.claude/
+*.swp
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Project runtime (re-created on demand; never commit run artifacts)
+runs/
+outputs/
+logs/
+
+# Local env overrides
+.env
+.env.local
+
+# Large telescope observation files (keep directory via .gitkeep)
+data/*
+!data/.gitkeep
