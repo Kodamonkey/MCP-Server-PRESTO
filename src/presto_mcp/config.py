@@ -111,19 +111,25 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
         )
 
     placeholders: list[Path] = []
-    has_any = False
+    has_observation_data = False
     for p in s.data_dir.iterdir():
         if not p.is_file():
             continue
-        has_any = True
+        # .gitkeep and other dotfiles are repo scaffolding, not telescope data.
+        if p.name.startswith("."):
+            continue
+        has_observation_data = True
         try:
             if p.stat().st_size == 0:
                 placeholders.append(p)
         except OSError as e:
             raise HealthCheckError(f"Cannot stat data file {p}: {e}") from e
 
-    if not has_any:
-        log.warning("data_dir %s contains no files; tools will reject inputs.", s.data_dir)
+    if not has_observation_data:
+        log.warning(
+            "data_dir %s contains no observation files; tools will reject inputs.",
+            s.data_dir,
+        )
 
     if placeholders:
         names = ", ".join(p.name for p in placeholders)

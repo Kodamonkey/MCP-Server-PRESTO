@@ -105,7 +105,9 @@ def set_settings(s: Settings) -> None:
         "structured metadata (telescope, source name, central freq, channels, "
         "sample time, etc.) plus URIs for manifest/stdout/stderr/artifacts. "
         "Path must be relative to the configured DATA_DIR; absolute paths and "
-        "'..' segments are rejected."
+        "'..' segments are rejected. "
+        "Set background=true when the MCP client times out before Docker finishes "
+        "(~60s for 150MB filterbank files); poll presto.get_run_manifest with run_id."
     ),
 )
 async def presto_readfile(
@@ -113,9 +115,23 @@ async def presto_readfile(
         str,
         Field(description="Path to a PRESTO-readable file relative to DATA_DIR."),
     ],
+    background: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "If true, return immediately with status RUNNING and poll "
+                "presto.get_run_manifest until SUCCESS/FAILED/TIMEOUT."
+            ),
+        ),
+    ] = False,
 ) -> ToolRunResult[ReadfileMetadata]:
     return await asyncio.to_thread(
-        run_readfile, input_file, backend=_backend_for_tools(), settings=_settings_for_tools()
+        run_readfile,
+        input_file,
+        backend=_backend_for_tools(),
+        settings=_settings_for_tools(),
+        background=background,
     )
 
 
@@ -146,6 +162,13 @@ async def presto_rfifind(
             ),
         ),
     ] = None,
+    background: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Return immediately with RUNNING; poll get_run_manifest.",
+        ),
+    ] = False,
 ) -> ToolRunResult[RfifindSummary]:
     return await asyncio.to_thread(
         run_rfifind,
@@ -154,6 +177,7 @@ async def presto_rfifind(
         time=time,
         output_prefix=output_prefix,
         settings=_settings_for_tools(),
+        background=background,
     )
 
 
@@ -186,6 +210,13 @@ async def presto_prepfold(
             description="Filename prefix for outputs. Defaults to 'fold'.",
         ),
     ] = None,
+    background: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Return immediately with RUNNING; poll get_run_manifest.",
+        ),
+    ] = False,
 ) -> ToolRunResult[PrepfoldResult]:
     return await asyncio.to_thread(
         run_prepfold,
@@ -195,6 +226,7 @@ async def presto_prepfold(
         backend=_backend_for_tools(),
         output_prefix=output_prefix,
         settings=_settings_for_tools(),
+        background=background,
     )
 
 

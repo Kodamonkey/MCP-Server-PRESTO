@@ -24,6 +24,7 @@ def run_rfifind(
     time: float = 2.0,
     output_prefix: str | None = None,
     settings: Settings | None = None,
+    background: bool = False,
 ) -> ToolRunResult[RfifindSummary]:
     """Run ``rfifind`` on a file under ``DATA_DIR``."""
     s = settings or get_settings()
@@ -47,4 +48,4 @@ def run_rfifind(
         cpus=s.default_cpus,
         memory_mb=s.default_memory_mb,
     )
-    return execute(spec, s, backend)
+    return execute(spec, s, backend, background=background)

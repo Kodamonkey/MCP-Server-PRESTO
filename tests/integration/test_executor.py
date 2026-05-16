@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -216,3 +217,41 @@ def test_execute_collects_artifacts(settings: Settings) -> None:
     ]
     m = load_manifest(settings.runs_dir / result.run_id)
     assert sorted(m.artifacts) == ["out.mask", "out.stats"]
+
+
+def test_execute_background_returns_running_then_completes(settings: Settings) -> None:
+    backend = FakeDockerBackend(
+        responses={
+            "readfile": FakeResponse(
+                stdout="hello readfile\n",
+                status=RunStatus.SUCCESS,
+            )
+        }
+    )
+    spec = RunSpec[ReadfileMetadata](
+        tool_name="readfile",
+        input_file="sample.fil",
+        inputs_extra={},
+        container_input_path="/data/sample.fil",
+        presto_argv_builder=_readfile_argv,
+        parser=_readfile_parser,
+        timeout_s=60,
+        cpus=2.0,
+        memory_mb=1024,
+    )
+
+    result = execute(spec, settings, backend, background=True)
+
+    assert result.status == RunStatus.RUNNING
+    assert result.result is None
+
+    run_dir = settings.runs_dir / result.run_id
+    deadline = time.monotonic() + 5.0
+    final = load_manifest(run_dir)
+    while final.status == RunStatus.RUNNING and time.monotonic() < deadline:
+        time.sleep(0.05)
+        final = load_manifest(run_dir)
+
+    assert final.status == RunStatus.SUCCESS
+    assert final.exit_code == 0
+    assert (run_dir / "stdout.log").read_text(encoding="utf-8") == "hello readfile\n"

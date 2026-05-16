@@ -50,6 +50,7 @@ def run_prepfold(
     backend: BackendProtocol,
     output_prefix: str | None = None,
     settings: Settings | None = None,
+    background: bool = False,
 ) -> ToolRunResult[PrepfoldResult]:
     """Mode A: ``prepfold -noxwin -p <period> -dm <dm> -o /outputs/artifacts/<prefix> ...``."""
     s = settings or get_settings()
@@ -85,4 +86,4 @@ def run_prepfold(
         cpus=s.default_cpus,
         memory_mb=s.default_memory_mb,
     )
-    return execute(spec, s, backend)
+    return execute(spec, s, backend, background=background)

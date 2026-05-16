@@ -27,6 +27,7 @@ def run_readfile(
     *,
     backend: BackendProtocol,
     settings: Settings | None = None,
+    background: bool = False,
 ) -> ToolRunResult[ReadfileMetadata]:
     """Run ``readfile`` on a file under ``DATA_DIR`` and return parsed metadata."""
     s = settings or get_settings()
@@ -41,4 +42,4 @@ def run_readfile(
         cpus=s.default_cpus,
         memory_mb=s.default_memory_mb,
     )
-    return execute(spec, s, backend)
+    return execute(spec, s, backend, background=background)

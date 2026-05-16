@@ -10,6 +10,7 @@ This module is async-free on purpose. Tools wrap calls in ``asyncio.to_thread``.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,6 +25,7 @@ from .errors import ManifestError, PathSecurityError
 from .manifest import write_manifest
 from .models import (
     BackendResult,
+    DockerInvocation,
     ReadfileMetadata,
     RfifindSummary,
     RunManifest,
@@ -95,33 +97,39 @@ def _result_uris(run_id: str, artifacts: list[str]) -> tuple[str, str, str, list
     )
 
 
-def execute(
+@dataclass(frozen=True)
+class _PreparedRun(Generic[T]):
+    spec: RunSpec[T]
+    settings: Settings
+    backend: BackendProtocol
+    started_at: datetime
+    run_id: str
+    run_dir: Path
+    container_name: str
+    host_input: Path
+    container_input: str
+    inputs_log: dict[str, str]
+    container_inputs: dict[str, str]
+    presto_argv: list[str]
+    invocation: DockerInvocation
+
+
+def _prepare_run(
     spec: RunSpec[T],
     settings: Settings,
     backend: BackendProtocol,
-) -> ToolRunResult[T]:
-    """Run one tool end-to-end. Always writes a manifest, even on failure.
-
-    Raises ``PathSecurityError`` for bad inputs (caller's contract violation);
-    container failures are returned in-band with ``status != SUCCESS``.
-    """
-    started_at = _now_utc()
-
-    # 1. Resolve input path against DATA_DIR (security boundary).
+) -> _PreparedRun[T]:
+    """Validate paths, allocate run dir, build Docker argv. No container I/O yet."""
     host_input = resolve_input_path(spec.input_file, settings.data_dir)
     container_input = _to_container_path(host_input, settings.data_dir)
-
-    # 2. Allocate a run dir.
     run_id, run_dir = create_run_dir(spec.tool_name, settings.runs_dir)
     container_name = f"presto-{run_id}"
 
     inputs_log: dict[str, str] = {"input_file": str(host_input)}
     inputs_log.update(spec.inputs_extra)
     container_inputs: dict[str, str] = {"input_file": container_input}
-
     presto_argv = spec.presto_argv_builder(container_input, run_dir)
 
-    # 3. Build invocation, run.
     invocation = build_invocation(
         image=settings.image,
         presto_argv=presto_argv,
@@ -131,15 +139,36 @@ def execute(
         memory_mb=spec.memory_mb,
         container_name=container_name,
     )
+    return _PreparedRun(
+        spec=spec,
+        settings=settings,
+        backend=backend,
+        started_at=_now_utc(),
+        run_id=run_id,
+        run_dir=run_dir,
+        container_name=container_name,
+        host_input=host_input,
+        container_input=container_input,
+        inputs_log=inputs_log,
+        container_inputs=container_inputs,
+        presto_argv=presto_argv,
+        invocation=invocation,
+    )
+
+
+def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
+    """Drive Docker, parse stdout, write the final manifest."""
+    spec = prepared.spec
+    run_id = prepared.run_id
+    run_dir = prepared.run_dir
+    invocation = prepared.invocation
 
     log.info("execute tool=%s run_id=%s", spec.tool_name, run_id)
-    backend_result = backend.run(invocation, timeout_s=spec.timeout_s)
+    backend_result = prepared.backend.run(invocation, timeout_s=spec.timeout_s)
 
-    # 4. Persist logs + collect artifacts.
     _persist_logs(run_dir, backend_result)
     artifacts = _collect_artifacts(run_dir)
 
-    # 5. Parse (only on SUCCESS — otherwise we have nothing meaningful).
     parsed: T | None = None
     parse_error: str | None = None
     if backend_result.status == RunStatus.SUCCESS:
@@ -149,23 +178,22 @@ def execute(
             parse_error = f"parser failed: {type(e).__name__}: {e}"
             log.exception("parser raised for %s", spec.tool_name)
 
-    # 6. Build manifest. Image digest is best-effort.
     finished_at = _now_utc()
     manifest = RunManifest(
         run_id=run_id,
         tool=spec.tool_name,
         status=backend_result.status if parse_error is None else RunStatus.FAILED,
         exit_code=backend_result.exit_code,
-        started_at=started_at,
+        started_at=prepared.started_at,
         finished_at=finished_at,
         duration_s=backend_result.duration_s,
         timeout_s=spec.timeout_s,
-        image=settings.image,
-        image_digest=_safe_digest(backend, settings.image),
+        image=prepared.settings.image,
+        image_digest=_safe_digest(prepared.backend, prepared.settings.image),
         docker_argv=invocation.argv,
-        presto_argv=presto_argv,
-        inputs=inputs_log,
-        container_inputs=container_inputs,
+        presto_argv=prepared.presto_argv,
+        inputs=prepared.inputs_log,
+        container_inputs=prepared.container_inputs,
         cpus=spec.cpus,
         memory_mb=spec.memory_mb,
         artifacts=artifacts,
@@ -198,6 +226,77 @@ def execute(
         stderr_uri=stderr_uri,
         artifact_uris=artifact_uris,
         error=manifest.error,
+    )
+
+
+def _background_worker(prepared: _PreparedRun[T]) -> None:
+    try:
+        _run_to_completion(prepared)
+    except Exception:  # noqa: BLE001
+        log.exception("background run failed for %s", prepared.run_id)
+
+
+def execute(
+    spec: RunSpec[T],
+    settings: Settings,
+    backend: BackendProtocol,
+    *,
+    background: bool = False,
+) -> ToolRunResult[T]:
+    """Run one tool end-to-end. Always writes a manifest, even on failure.
+
+    With ``background=True``, returns immediately with ``status=RUNNING`` after
+    writing an initial manifest. The Docker invocation continues in a daemon
+    thread; poll ``presto.get_run_manifest`` for the final result.
+
+    Raises ``PathSecurityError`` for bad inputs (caller's contract violation);
+    container failures are returned in-band with ``status != SUCCESS``.
+    """
+    prepared = _prepare_run(spec, settings, backend)
+
+    if not background:
+        return _run_to_completion(prepared)
+
+    invocation = prepared.invocation
+    running = RunManifest(
+        run_id=prepared.run_id,
+        tool=spec.tool_name,
+        status=RunStatus.RUNNING,
+        started_at=prepared.started_at,
+        finished_at=None,
+        duration_s=None,
+        timeout_s=spec.timeout_s,
+        image=settings.image,
+        image_digest=None,
+        docker_argv=invocation.argv,
+        presto_argv=prepared.presto_argv,
+        inputs=prepared.inputs_log,
+        container_inputs=prepared.container_inputs,
+        cpus=spec.cpus,
+        memory_mb=spec.memory_mb,
+        artifacts=[],
+        error=None,
+    )
+    write_manifest(prepared.run_dir, running)
+
+    thread = threading.Thread(
+        target=_background_worker,
+        args=(prepared,),
+        name=f"presto-run-{prepared.run_id}",
+        daemon=True,
+    )
+    thread.start()
+
+    manifest_uri, stdout_uri, stderr_uri, _artifact_uris = _result_uris(prepared.run_id, [])
+    return ToolRunResult[T](
+        run_id=prepared.run_id,
+        status=RunStatus.RUNNING,
+        result=None,
+        manifest_uri=manifest_uri,
+        stdout_uri=stdout_uri,
+        stderr_uri=stderr_uri,
+        artifact_uris=[],
+        error=None,
     )
 
 

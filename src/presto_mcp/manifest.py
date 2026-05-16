@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 
 from .errors import ManifestError
@@ -33,11 +34,22 @@ def write_manifest(run_dir: Path, manifest: RunManifest) -> Path:
     target = manifest_path(run_dir)
     tmp = target.with_suffix(".json.tmp")
     payload = manifest.model_dump_json(indent=2)
-    try:
-        tmp.write_text(payload, encoding="utf-8")
-        tmp.replace(target)
-    except OSError as e:
-        raise ManifestError(f"failed to write manifest at {target}: {e}") from e
+    last_err: OSError | None = None
+    for attempt in range(8):
+        try:
+            tmp.write_text(payload, encoding="utf-8")
+            # On Windows, os.replace fails if readers still hold manifest.json.
+            if target.exists():
+                target.unlink()
+            tmp.replace(target)
+            last_err = None
+            break
+        except OSError as e:
+            last_err = e
+            if attempt < 7:
+                time.sleep(0.05 * (attempt + 1))
+    if last_err is not None:
+        raise ManifestError(f"failed to write manifest at {target}: {last_err}") from last_err
 
     log.debug("manifest written: %s", target)
     return target
