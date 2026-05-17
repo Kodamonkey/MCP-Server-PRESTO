@@ -217,6 +217,44 @@ class SiftingResult(BaseModel):
     summary_file: str | None = None
 
 
+class ZapbirdsResult(BaseModel):
+    input_fft: str
+    zaplist_file: str
+    zapped_fft: str | None = None
+    inf_file: str | None = None
+    num_zaps: int | None = None
+
+
+class RrattrapResult(BaseModel):
+    input_singlepulse_files: list[str] = Field(default_factory=list)
+    inf_file: str | None = None
+    groups_file: str | None = None
+    num_groups: int | None = None
+    output_files: list[str] = Field(default_factory=list)
+
+
+class MakeSpdResult(BaseModel):
+    raw_file: str
+    groups_file: str
+    input_singlepulse_files: list[str] = Field(default_factory=list)
+    mask_file: str | None = None
+    spd_files: list[str] = Field(default_factory=list)
+
+
+class PlotSpdResult(BaseModel):
+    input_spd: str
+    png_file: str | None = None
+
+
+class WaterfallerResult(BaseModel):
+    input_raw: str
+    start_s: float
+    duration_s: float
+    dm: float
+    mask_file: str | None = None
+    output_file: str | None = None
+
+
 class GetTOAsResult(BaseModel):
     pfd_file: str
     template_file: str

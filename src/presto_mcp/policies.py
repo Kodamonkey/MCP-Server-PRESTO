@@ -69,6 +69,26 @@ SIFT_SIGMA_MIN = 1.0
 SIFT_SIGMA_MAX = 50.0
 SIFT_MAX_ACCEL_FILES = 4096
 
+# zapbirds
+ZAPBIRDS_MIN_NFFT = 0
+ZAPBIRDS_MAX_NFFT = 1 << 30
+ZAPBIRDS_BARYV_MIN = -0.1
+ZAPBIRDS_BARYV_MAX = 0.1
+
+# rrattrap
+RRATTRAP_MIN_SP_FILES = 1
+RRATTRAP_MAX_SP_FILES = 4096
+
+# make_spd
+MAKESPD_MIN_SP_FILES = 1
+MAKESPD_MAX_SP_FILES = 4096
+
+# waterfaller
+WATERFALL_MIN_DURATION_S = 1e-6
+WATERFALL_MAX_DURATION_S = 600.0
+WATERFALL_MIN_START_S = 0.0
+WATERFALL_MAX_START_S = 1e6
+
 # get_TOAs
 TOAS_SUBINTS_MIN = 1
 TOAS_SUBINTS_MAX = 4096
@@ -320,6 +340,73 @@ def check_ddplan_sample_time_us(t_us: float) -> float:
         raise PolicyViolationError(
             f"sample_time_us {t_us} outside "
             f"[{DDPLAN_SAMPLE_TIME_MIN_US}, {DDPLAN_SAMPLE_TIME_MAX_US}]"
+        )
+    return f
+
+
+def check_zapbirds_baryv(v: float | None) -> float | None:
+    if v is None:
+        return None
+    f = float(v)
+    if not (ZAPBIRDS_BARYV_MIN <= f <= ZAPBIRDS_BARYV_MAX):
+        raise PolicyViolationError(
+            f"baryv {v} outside [{ZAPBIRDS_BARYV_MIN}, {ZAPBIRDS_BARYV_MAX}]"
+        )
+    return f
+
+
+def check_zapbirds_nfft(n: int | None) -> int | None:
+    if n is None:
+        return None
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"nfft must be int, got {type(n).__name__}")
+    if not (ZAPBIRDS_MIN_NFFT <= n <= ZAPBIRDS_MAX_NFFT):
+        raise PolicyViolationError(
+            f"nfft {n} outside [{ZAPBIRDS_MIN_NFFT}, {ZAPBIRDS_MAX_NFFT}]"
+        )
+    return n
+
+
+def check_rrattrap_input_count(n: int) -> int:
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"input count must be int, got {type(n).__name__}")
+    if n < RRATTRAP_MIN_SP_FILES:
+        raise PolicyViolationError("rrattrap requires at least one .singlepulse file")
+    if n > RRATTRAP_MAX_SP_FILES:
+        raise PolicyViolationError(
+            f"rrattrap input count {n} exceeds cap {RRATTRAP_MAX_SP_FILES}"
+        )
+    return n
+
+
+def check_makespd_input_count(n: int) -> int:
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"input count must be int, got {type(n).__name__}")
+    if n < MAKESPD_MIN_SP_FILES:
+        raise PolicyViolationError("make_spd requires at least one .singlepulse file")
+    if n > MAKESPD_MAX_SP_FILES:
+        raise PolicyViolationError(
+            f"make_spd input count {n} exceeds cap {MAKESPD_MAX_SP_FILES}"
+        )
+    return n
+
+
+def check_waterfall_duration(d: float) -> float:
+    f = float(d)
+    if not (WATERFALL_MIN_DURATION_S <= f <= WATERFALL_MAX_DURATION_S):
+        raise PolicyViolationError(
+            f"duration_s {d} outside "
+            f"[{WATERFALL_MIN_DURATION_S}, {WATERFALL_MAX_DURATION_S}]"
+        )
+    return f
+
+
+def check_waterfall_start(t: float) -> float:
+    f = float(t)
+    if not (WATERFALL_MIN_START_S <= f <= WATERFALL_MAX_START_S):
+        raise PolicyViolationError(
+            f"start_s {t} outside "
+            f"[{WATERFALL_MIN_START_S}, {WATERFALL_MAX_START_S}]"
         )
     return f
 

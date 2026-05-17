@@ -44,30 +44,40 @@ from .models import (
     AccelsearchResult,
     DDplanResult,
     GetTOAsResult,
+    MakeSpdResult,
+    PlotSpdResult,
     PrepdataResult,
     PrepfoldResult,
     PrepsubbandResult,
     ReadfileMetadata,
     RealfftResult,
     RfifindSummary,
+    RrattrapResult,
     RunManifest,
     RunSummary,
     SiftingResult,
     SinglePulseSearchResult,
     ToolRunResult,
+    WaterfallerResult,
+    ZapbirdsResult,
 )
 from .tools import list_runs as list_runs_tool
 from .tools.accelsearch import run_accelsearch
 from .tools.ddplan import run_ddplan
 from .tools.get_toas import run_get_toas
+from .tools.make_spd import run_make_spd
+from .tools.plot_spd import run_plot_spd
 from .tools.prepdata import run_prepdata
 from .tools.prepfold import run_prepfold
 from .tools.prepsubband import run_prepsubband
 from .tools.readfile import run_readfile
 from .tools.realfft import run_realfft
 from .tools.rfifind import run_rfifind
+from .tools.rrattrap import run_rrattrap
 from .tools.sifting import run_sifting
 from .tools.single_pulse_search import run_single_pulse_search
+from .tools.waterfaller import run_waterfaller
+from .tools.zapbirds import run_zapbirds
 
 log = logging.getLogger("presto_mcp.server")
 
@@ -563,6 +573,254 @@ async def presto_get_toas(
         backend=_backend_for_tools(),
         num_subints=num_subints,
         num_subbands=num_subbands,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.zapbirds",
+    description=(
+        "Run PRESTO 'zapbirds' inside Docker to apply a zaplist to a .fft "
+        "(modifies the .fft in place). input_fft is "
+        "'<run_id>/artifacts/<file>.fft' relative to RUNS_DIR (from a prior "
+        "realfft run); zaplist_file is a text birds/zap file relative to "
+        "DATA_DIR. The .fft (+ sibling .inf) is staged into the current run's "
+        "artifacts/ and zapped there."
+    ),
+)
+async def presto_zapbirds(
+    input_fft: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.fft relative to RUNS_DIR."),
+    ],
+    zaplist_file: Annotated[
+        str,
+        Field(description="Zaplist / birds file relative to DATA_DIR."),
+    ],
+    baryv: Annotated[
+        float | None,
+        Field(default=None, description="Average barycentric velocity (-baryv)."),
+    ] = None,
+    nfft: Annotated[
+        int | None,
+        Field(default=None, ge=0, description="Override -N nfft."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[ZapbirdsResult]:
+    return await asyncio.to_thread(
+        run_zapbirds,
+        input_fft,
+        zaplist_file,
+        backend=_backend_for_tools(),
+        baryv=baryv,
+        nfft=nfft,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.rrattrap",
+    description=(
+        "Run PRESTO 'rrattrap.py' inside Docker to group single-pulse events "
+        "from one or more .singlepulse files (from prior single_pulse_search "
+        "runs) plus the .inf header. Writes groups.txt into the run's "
+        "artifacts/. All inputs are '<run_id>/artifacts/...' relative to RUNS_DIR."
+    ),
+)
+async def presto_rrattrap(
+    singlepulse_files: Annotated[
+        list[str],
+        Field(description="List of <run_id>/artifacts/<file>.singlepulse paths."),
+    ],
+    inf_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.inf relative to RUNS_DIR."),
+    ],
+    min_group: Annotated[
+        int | None,
+        Field(default=None, ge=1, description="Minimum events per group (--min-group)."),
+    ] = None,
+    use_dm_plan: Annotated[
+        bool,
+        Field(default=False, description="Pass --use-DMplan."),
+    ] = False,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[RrattrapResult]:
+    return await asyncio.to_thread(
+        run_rrattrap,
+        singlepulse_files,
+        inf_file,
+        backend=_backend_for_tools(),
+        min_group=min_group,
+        use_dm_plan=use_dm_plan,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.make_spd",
+    description=(
+        "Run PRESTO 'make_spd.py' inside Docker to produce single-pulse "
+        "diagnostic .spd files. Reads a rrattrap groups.txt + raw "
+        "filterbank/PSRFITS + .singlepulse files (and optional rfifind .mask). "
+        "raw_file and mask_file are relative to DATA_DIR; groups_file and "
+        "singlepulse_files are '<run_id>/artifacts/...' relative to RUNS_DIR."
+    ),
+)
+async def presto_make_spd(
+    raw_file: Annotated[
+        str,
+        Field(description="Raw filterbank/PSRFITS file relative to DATA_DIR."),
+    ],
+    groups_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<groups>.txt relative to RUNS_DIR."),
+    ],
+    singlepulse_files: Annotated[
+        list[str],
+        Field(description="List of <run_id>/artifacts/<file>.singlepulse paths."),
+    ],
+    mask_file: Annotated[
+        str | None,
+        Field(default=None, description="Optional rfifind .mask file relative to DATA_DIR."),
+    ] = None,
+    output_prefix: Annotated[
+        str | None,
+        Field(default=None, description="Output basename for .spd files. Defaults to 'spd'."),
+    ] = None,
+    apply_mask: Annotated[
+        bool,
+        Field(default=False, description="Pass --mask to enable masking (requires mask_file)."),
+    ] = False,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[MakeSpdResult]:
+    return await asyncio.to_thread(
+        run_make_spd,
+        raw_file,
+        groups_file,
+        singlepulse_files,
+        backend=_backend_for_tools(),
+        mask_file=mask_file,
+        output_prefix=output_prefix,
+        apply_mask=apply_mask,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.plot_spd",
+    description=(
+        "Run PRESTO 'plot_spd.py' inside Docker to render a PNG/PS diagnostic "
+        "plot from a .spd (and optional .singlepulse files). All inputs are "
+        "'<run_id>/artifacts/...' relative to RUNS_DIR."
+    ),
+)
+async def presto_plot_spd(
+    input_spd: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.spd relative to RUNS_DIR."),
+    ],
+    singlepulse_files: Annotated[
+        list[str] | None,
+        Field(default=None, description="Optional list of <run_id>/artifacts/<file>.singlepulse."),
+    ] = None,
+    output_prefix: Annotated[
+        str | None,
+        Field(default=None, description="Output filename basename. Defaults to 'spdplot'."),
+    ] = None,
+    just_waterfall: Annotated[
+        bool,
+        Field(default=False, description="Pass --just-waterfall."),
+    ] = False,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[PlotSpdResult]:
+    return await asyncio.to_thread(
+        run_plot_spd,
+        input_spd,
+        backend=_backend_for_tools(),
+        singlepulse_files=singlepulse_files,
+        output_prefix=output_prefix,
+        just_waterfall=just_waterfall,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.waterfaller",
+    description=(
+        "Run PRESTO 'waterfaller.py' inside Docker to render a dynamic-spectrum "
+        "(waterfall) image around a candidate (start_s, duration_s, dm) for a "
+        "raw filterbank/PSRFITS file under DATA_DIR. Optional mask_file is "
+        "also relative to DATA_DIR. Requires the PRESTO image's PNG-tagged "
+        "variant to write the figure into the working directory."
+    ),
+)
+async def presto_waterfaller(
+    input_file: Annotated[
+        str,
+        Field(description="Raw filterbank/PSRFITS file relative to DATA_DIR."),
+    ],
+    start_s: Annotated[
+        float,
+        Field(ge=0.0, description="Start time of the waterfall, seconds."),
+    ],
+    duration_s: Annotated[
+        float,
+        Field(gt=0.0, le=600.0, description="Duration of the waterfall, seconds."),
+    ],
+    dm: Annotated[
+        float,
+        Field(ge=0.0, le=10_000.0, description="DM to use when dedispersing for plot."),
+    ],
+    mask_file: Annotated[
+        str | None,
+        Field(default=None, description="Optional rfifind .mask file relative to DATA_DIR."),
+    ] = None,
+    nsub: Annotated[
+        int | None,
+        Field(default=None, ge=1, le=4096, description="Number of subbands (-s)."),
+    ] = None,
+    nbins: Annotated[
+        int | None,
+        Field(default=None, ge=1, description="Number of time bins (-n)."),
+    ] = None,
+    downsamp: Annotated[
+        int | None,
+        Field(default=None, ge=1, description="Downsample factor (--downsamp)."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[WaterfallerResult]:
+    return await asyncio.to_thread(
+        run_waterfaller,
+        input_file,
+        backend=_backend_for_tools(),
+        start_s=start_s,
+        duration_s=duration_s,
+        dm=dm,
+        mask_file=mask_file,
+        nsub=nsub,
+        nbins=nbins,
+        downsamp=downsamp,
         settings=_settings_for_tools(),
         background=background,
     )

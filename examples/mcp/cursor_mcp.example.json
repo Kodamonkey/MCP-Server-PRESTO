@@ -2,14 +2,8 @@
   "mcpServers": {
     "presto": {
       "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "REPLACE_WITH_REPO_ROOT",
-        "python",
-        "-m",
-        "presto_mcp.server"
-      ],
+      "args": ["run", "python", "-m", "presto_mcp.server"],
+      "cwd": "REPLACE_WITH_REPO_ROOT",
       "env": {
         "PRESTO_IMAGE": "alex88ridolfi/presto5:png",
         "PRESTO_DATA_DIR": "./data",

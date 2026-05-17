@@ -41,6 +41,7 @@ def build_invocation(
     network: str = "none",
     stop_timeout_s: int = 5,
     runs_dir_ro: Path | None = None,
+    workdir: str | None = None,
 ) -> DockerInvocation:
     """Construct a :class:`DockerInvocation`. Pure function — no I/O.
 
@@ -78,6 +79,12 @@ def build_invocation(
     if runs_dir_ro is not None:
         runs_src = str(runs_dir_ro.resolve())
         argv += ["--mount", f"type=bind,src={runs_src},dst={CONTAINER_RUNS_MOUNT},readonly"]
+    if workdir is not None:
+        if not workdir.startswith("/"):
+            raise DockerInvocationError(
+                f"workdir must be absolute container path, got {workdir!r}"
+            )
+        argv += ["--workdir", workdir]
     argv += [
         image,
         *presto_argv,

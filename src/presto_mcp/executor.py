@@ -83,6 +83,7 @@ class RunSpec(Generic[T]):
     input_root: InputRoot = "data"
     extra_inputs: tuple[ExtraInput, ...] = field(default_factory=tuple)
     pre_invocation_hook: Callable[[Path, tuple[Path, ...]], None] | None = None
+    container_workdir: str | None = None
 
 
 def _now_utc() -> datetime:
@@ -203,6 +204,7 @@ def _prepare_run(
         memory_mb=spec.memory_mb,
         container_name=container_name,
         runs_dir_ro=settings.runs_dir if needs_runs_mount else None,
+        workdir=spec.container_workdir,
     )
     return _PreparedRun(
         spec=spec,
