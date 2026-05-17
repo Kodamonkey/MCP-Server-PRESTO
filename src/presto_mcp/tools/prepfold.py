@@ -58,7 +58,9 @@ def run_prepfold(
     d = check_prepfold_dm(dm)
     prefix = check_output_prefix(output_prefix or DEFAULT_PREFIX)
 
-    def argv_builder(container_input: str, _run_dir: Path) -> list[str]:
+    def argv_builder(
+        container_input: str, _extras: tuple[str, ...], _run_dir: Path
+    ) -> list[str]:
         return [
             "prepfold",
             "-noxwin",

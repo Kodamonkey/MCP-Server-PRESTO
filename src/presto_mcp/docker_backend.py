@@ -24,6 +24,7 @@ log = logging.getLogger("presto_mcp.docker_backend")
 
 CONTAINER_DATA_MOUNT = "/data"
 CONTAINER_OUTPUT_MOUNT = "/outputs"
+CONTAINER_RUNS_MOUNT = "/runs"
 
 
 def build_invocation(
@@ -39,11 +40,16 @@ def build_invocation(
     pids_limit: int = 256,
     network: str = "none",
     stop_timeout_s: int = 5,
+    runs_dir_ro: Path | None = None,
 ) -> DockerInvocation:
     """Construct a :class:`DockerInvocation`. Pure function — no I/O.
 
     The argv list is fully deterministic given the inputs. Argument order and
     grouping are pinned by the golden test in ``tests/unit/test_docker_backend``.
+
+    When ``runs_dir_ro`` is provided, an additional read-only mount at
+    ``/runs`` is appended (used by pipeline tools that consume prior-run
+    artifacts).
     """
     if not container_name or " " in container_name:
         raise DockerInvocationError(f"invalid container_name: {container_name!r}")
@@ -68,6 +74,11 @@ def build_invocation(
         f"--stop-timeout={stop_timeout_s}",
         "--mount", f"type=bind,src={data_src},dst={CONTAINER_DATA_MOUNT},readonly",
         "--mount", f"type=bind,src={run_src},dst={CONTAINER_OUTPUT_MOUNT}",
+    ]
+    if runs_dir_ro is not None:
+        runs_src = str(runs_dir_ro.resolve())
+        argv += ["--mount", f"type=bind,src={runs_src},dst={CONTAINER_RUNS_MOUNT},readonly"]
+    argv += [
         image,
         *presto_argv,
     ]

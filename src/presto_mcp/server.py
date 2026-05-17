@@ -41,17 +41,33 @@ from .errors import (
     PolicyViolationError,
 )
 from .models import (
+    AccelsearchResult,
+    DDplanResult,
+    GetTOAsResult,
+    PrepdataResult,
     PrepfoldResult,
+    PrepsubbandResult,
     ReadfileMetadata,
+    RealfftResult,
     RfifindSummary,
     RunManifest,
     RunSummary,
+    SiftingResult,
+    SinglePulseSearchResult,
     ToolRunResult,
 )
 from .tools import list_runs as list_runs_tool
+from .tools.accelsearch import run_accelsearch
+from .tools.ddplan import run_ddplan
+from .tools.get_toas import run_get_toas
+from .tools.prepdata import run_prepdata
 from .tools.prepfold import run_prepfold
+from .tools.prepsubband import run_prepsubband
 from .tools.readfile import run_readfile
+from .tools.realfft import run_realfft
 from .tools.rfifind import run_rfifind
+from .tools.sifting import run_sifting
+from .tools.single_pulse_search import run_single_pulse_search
 
 log = logging.getLogger("presto_mcp.server")
 
@@ -225,6 +241,328 @@ async def presto_prepfold(
         dm,
         backend=_backend_for_tools(),
         output_prefix=output_prefix,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.prepdata",
+    description=(
+        "Run PRESTO 'prepdata' inside Docker to dedisperse one DM trial into a "
+        "single-precision .dat time series (+ .inf header). Optionally accepts "
+        "a mask_file (relative to DATA_DIR). Input path is relative to DATA_DIR."
+    ),
+)
+async def presto_prepdata(
+    input_file: Annotated[
+        str,
+        Field(description="Path to a PRESTO-readable file relative to DATA_DIR."),
+    ],
+    dm: Annotated[
+        float,
+        Field(ge=0.0, le=10_000.0, description="Dispersion measure (pc cm^-3)."),
+    ],
+    output_prefix: Annotated[
+        str | None,
+        Field(default=None, description="Output filename prefix. Defaults to 'prep'."),
+    ] = None,
+    mask_file: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Optional rfifind .mask file relative to DATA_DIR.",
+        ),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[PrepdataResult]:
+    return await asyncio.to_thread(
+        run_prepdata,
+        input_file,
+        dm,
+        backend=_backend_for_tools(),
+        output_prefix=output_prefix,
+        mask_file=mask_file,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.ddplan",
+    description=(
+        "Run PRESTO 'DDplan.py' inside Docker to compute an optimal DM-trial "
+        "plan. Pure compute (no data input). Returns a list of passes "
+        "(low_dm, dm_step, num_dms, downsamp) for use with presto.prepsubband."
+    ),
+)
+async def presto_ddplan(
+    dm_low: Annotated[float, Field(ge=0.0, le=10_000.0, description="Lowest DM to plan.")],
+    dm_high: Annotated[float, Field(ge=0.0, le=10_000.0, description="Highest DM to plan.")],
+    freq_mhz: Annotated[float, Field(gt=0.0, description="Center frequency (MHz).")],
+    bw_mhz: Annotated[float, Field(gt=0.0, description="Total bandwidth (MHz).")],
+    num_channels: Annotated[int, Field(ge=1, le=4096, description="Number of frequency channels.")],
+    sample_time_us: Annotated[
+        float,
+        Field(gt=0.0, description="Native sample time in microseconds."),
+    ],
+    num_subbands: Annotated[
+        int | None,
+        Field(default=None, ge=1, le=4096, description="Optional number of subbands."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[DDplanResult]:
+    return await asyncio.to_thread(
+        run_ddplan,
+        backend=_backend_for_tools(),
+        dm_low=dm_low,
+        dm_high=dm_high,
+        freq_mhz=freq_mhz,
+        bw_mhz=bw_mhz,
+        num_channels=num_channels,
+        sample_time_us=sample_time_us,
+        num_subbands=num_subbands,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.prepsubband",
+    description=(
+        "Run PRESTO 'prepsubband' inside Docker to dedisperse a range of DM "
+        "trials in a single pass. Produces one <prefix>_DM<dm>.dat per trial. "
+        "Use presto.ddplan first to choose dm_low/dm_step/num_dms/num_subbands."
+    ),
+)
+async def presto_prepsubband(
+    input_file: Annotated[
+        str,
+        Field(description="Path to a PRESTO-readable file relative to DATA_DIR."),
+    ],
+    dm_low: Annotated[float, Field(ge=0.0, le=10_000.0, description="Lowest DM.")],
+    dm_step: Annotated[float, Field(gt=0.0, description="DM step.")],
+    num_dms: Annotated[int, Field(ge=1, le=100_000, description="Number of DM trials.")],
+    num_subbands: Annotated[int, Field(ge=1, le=4096, description="Number of subbands.")],
+    output_prefix: Annotated[
+        str | None,
+        Field(default=None, description="Output filename prefix. Defaults to 'sub'."),
+    ] = None,
+    mask_file: Annotated[
+        str | None,
+        Field(default=None, description="Optional rfifind .mask file relative to DATA_DIR."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[PrepsubbandResult]:
+    return await asyncio.to_thread(
+        run_prepsubband,
+        input_file,
+        backend=_backend_for_tools(),
+        dm_low=dm_low,
+        dm_step=dm_step,
+        num_dms=num_dms,
+        num_subbands=num_subbands,
+        output_prefix=output_prefix,
+        mask_file=mask_file,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.realfft",
+    description=(
+        "Run PRESTO 'realfft' inside Docker to FFT a dedispersed .dat into a "
+        ".fft. input_file is interpreted as '<run_id>/artifacts/<file>.dat' "
+        "relative to RUNS_DIR (typically from a prior prepdata/prepsubband run). "
+        "The .dat (+ sibling .inf) is copied into the current run's artifacts/."
+    ),
+)
+async def presto_realfft(
+    input_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.dat relative to RUNS_DIR."),
+    ],
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[RealfftResult]:
+    return await asyncio.to_thread(
+        run_realfft,
+        input_file,
+        backend=_backend_for_tools(),
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.accelsearch",
+    description=(
+        "Run PRESTO 'accelsearch' inside Docker for Fourier / acceleration "
+        "candidate search on a .fft (from a prior realfft run). Produces "
+        "ACCEL_<zmax> + .txtcand artifacts and a typed top-N candidate list. "
+        "input_file is interpreted relative to RUNS_DIR."
+    ),
+)
+async def presto_accelsearch(
+    input_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.fft relative to RUNS_DIR."),
+    ],
+    zmax: Annotated[
+        int,
+        Field(default=200, ge=0, le=1200, description="Max Fourier z to search."),
+    ] = 200,
+    numharm: Annotated[
+        int,
+        Field(default=8, description="Number of harmonics to sum (1,2,4,8,16,32)."),
+    ] = 8,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[AccelsearchResult]:
+    return await asyncio.to_thread(
+        run_accelsearch,
+        input_file,
+        backend=_backend_for_tools(),
+        zmax=zmax,
+        numharm=numharm,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.single_pulse_search",
+    description=(
+        "Run PRESTO 'single_pulse_search.py' inside Docker over one or more "
+        ".dat files (from prior prepdata/prepsubband runs) to detect bright "
+        "single pulses (FRBs, giant pulses). Each input gets a .singlepulse; "
+        "a summary .ps plot is written when multiple inputs are provided."
+    ),
+)
+async def presto_single_pulse_search(
+    input_files: Annotated[
+        list[str],
+        Field(description="List of <run_id>/artifacts/<file>.dat paths relative to RUNS_DIR."),
+    ],
+    threshold: Annotated[
+        float,
+        Field(default=5.0, ge=1.0, le=50.0, description="Sigma threshold for detection."),
+    ] = 5.0,
+    max_width_s: Annotated[
+        float,
+        Field(default=0.1, gt=0.0, le=10.0, description="Max boxcar width in seconds."),
+    ] = 0.1,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[SinglePulseSearchResult]:
+    return await asyncio.to_thread(
+        run_single_pulse_search,
+        input_files,
+        backend=_backend_for_tools(),
+        threshold=threshold,
+        max_width_s=max_width_s,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.sifting",
+    description=(
+        "Run PRESTO 'ACCEL_sift.py' inside Docker over many ACCEL_* candidate "
+        "files (from prior accelsearch runs) to dedupe and rank survivors. "
+        "Inputs are interpreted relative to RUNS_DIR and staged into the new "
+        "run's staging/ directory."
+    ),
+)
+async def presto_sifting(
+    accel_files: Annotated[
+        list[str],
+        Field(description="List of <run_id>/artifacts/<file>_ACCEL_<zmax> paths relative to RUNS_DIR."),
+    ],
+    min_num_dms: Annotated[
+        int,
+        Field(default=2, ge=1, le=1000, description="Min DM trials a candidate must appear in."),
+    ] = 2,
+    low_dm_cutoff: Annotated[
+        float,
+        Field(default=2.0, ge=0.0, le=10_000.0, description="Discard candidates below this DM."),
+    ] = 2.0,
+    sigma_threshold: Annotated[
+        float,
+        Field(default=4.0, ge=1.0, le=50.0, description="Min sigma for survivors."),
+    ] = 4.0,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[SiftingResult]:
+    return await asyncio.to_thread(
+        run_sifting,
+        accel_files,
+        backend=_backend_for_tools(),
+        min_num_dms=min_num_dms,
+        low_dm_cutoff=low_dm_cutoff,
+        sigma_threshold=sigma_threshold,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.get_toas",
+    description=(
+        "Run PRESTO 'get_TOAs.py' inside Docker to compute Times of Arrival "
+        "from a folded .pfd plus a Gaussian template. pfd_file is "
+        "'<run_id>/artifacts/<file>.pfd' relative to RUNS_DIR; template_file "
+        "is relative to DATA_DIR. Returns TEMPO/TEMPO2 TOA lines."
+    ),
+)
+async def presto_get_toas(
+    pfd_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.pfd relative to RUNS_DIR."),
+    ],
+    template_file: Annotated[
+        str,
+        Field(description="Gaussian template (.gaussians/.template) relative to DATA_DIR."),
+    ],
+    num_subints: Annotated[
+        int,
+        Field(default=1, ge=1, le=4096, description="Number of sub-integrations."),
+    ] = 1,
+    num_subbands: Annotated[
+        int,
+        Field(default=1, ge=1, le=4096, description="Number of frequency subbands."),
+    ] = 1,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[GetTOAsResult]:
+    return await asyncio.to_thread(
+        run_get_toas,
+        pfd_file,
+        template_file,
+        backend=_backend_for_tools(),
+        num_subints=num_subints,
+        num_subbands=num_subbands,
         settings=_settings_for_tools(),
         background=background,
     )
