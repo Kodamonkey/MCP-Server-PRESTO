@@ -1,184 +1,177 @@
 # presto-mcp
 
-A typed, sandboxed [Model Context Protocol](https://modelcontextprotocol.io) server that lets LLMs invoke real **PRESTO** (pulsar / radio-astronomy) tools — `readfile`, `rfifind`, `prepfold` — through Docker. Every invocation is sandboxed (`--network none`, read-only data mount, `--pids-limit`, `no-new-privileges`), persisted to a reproducible run manifest, and exposed as MCP resources.
+A typed, sandboxed [Model Context Protocol](https://modelcontextprotocol.io) server that lets LLMs run real **PRESTO** (pulsar / radio-astronomy) tools inside Docker. Every run is isolated (`--network none`, read-only data mount, CPU/memory caps), logged to `runs/<run_id>/`, and exposed as MCP resources.
 
-> PRESTO-only. **Not** PrestoDB, **not** Apache Pulsar, **not** PulsarX / TransientX / riptide / Heimdall / PULSAR_MINER.
-
----
-
-## What this MVP exposes
-
-| MCP tool                    | What it does                                                              |
-|-----------------------------|---------------------------------------------------------------------------|
-| `presto.readfile`           | Parse SIGPROC filterbank / PSRFITS header metadata.                       |
-| `presto.rfifind`            | Find RFI; produce `.mask`/`.rfi`/`.stats` artifacts.                      |
-| `presto.prepfold` (Mode A)  | Fold at a known candidate period + DM. Produces `.pfd` / `.pfd.bestprof`. |
-| `presto.list_runs`          | List recent runs from the local `runs/` directory.                        |
-| `presto.get_run_manifest`   | Return the full manifest for one `run_id`.                                |
-
-| MCP resource                                          | Contents                              |
-|-------------------------------------------------------|---------------------------------------|
-| `presto://runs/{run_id}/manifest`                     | `manifest.json` for the run           |
-| `presto://runs/{run_id}/stdout`                       | captured PRESTO stdout                |
-| `presto://runs/{run_id}/stderr`                       | captured PRESTO stderr                |
-| `presto://runs/{run_id}/artifacts/{filename}`         | one artifact (text inline; binary or >1 MiB returns a JSON descriptor) |
+> **PRESTO-only** — not PrestoDB, Apache Pulsar, PulsarX, TransientX, riptide, Heimdall, or PULSAR_MINER.
 
 ---
 
-## Prerequisites
+## Quick start
 
-- **Python 3.11+** (3.11 is what `uv sync` provisions by default).
-- [**uv**](https://github.com/astral-sh/uv) for environment management. The repo's `pyproject.toml` pins dev tools.
-- **Docker Desktop / engine** running on the host.
-- PRESTO image pulled:
-  ```bash
-  docker pull alex88ridolfi/presto5:png
-  ```
-
-### Verify Docker + PRESTO
+**1. Install**
 
 ```bash
-docker images alex88ridolfi/presto5:png
-docker run --rm alex88ridolfi/presto5:png which readfile rfifind prepfold
-# Expected: /software/presto5/installation/bin/{readfile,rfifind,prepfold}
-```
-
----
-
-## Install
-
-```bash
+git clone <your-fork-or-repo-url>
+cd MCP-Server-PRESTO
 uv sync --extra dev
+docker pull alex88ridolfi/presto5:png
 ```
 
-This creates `.venv/`, installs `mcp==1.27.1`, Pydantic v2, Typer, dev tools (pytest, ruff).
+Put observation files in `data/` (or set `PRESTO_DATA_DIR` in `.env` — copy from `.env.example`).
 
-Copy `.env.example` to `.env` if you want to override defaults:
+**2. Connect an MCP client**
 
-```bash
-cp .env.example .env
-```
+| Client | What to do |
+|--------|------------|
+| **Cursor** | Copy [`examples/mcp/cursor_mcp.example.json`](examples/mcp/cursor_mcp.example.json) → `.cursor/mcp.json`, replace `REPLACE_WITH_REPO_ROOT` with the absolute repo path, enable **presto** in Settings → MCP. |
+| **Claude Desktop** | Merge the `presto` block from [`examples/mcp/claude_desktop_config.example.json`](examples/mcp/claude_desktop_config.example.json) into your MCP config; same path replacement. Restart the app. |
 
----
+More detail (Windows paths, venv fallback): [`examples/mcp/README.md`](examples/mcp/README.md).
 
-## Run the MCP server (STDIO)
-
-```bash
-uv run python -m presto_mcp.server
-```
-
-The server reads `PRESTO_*` env vars from `.env` and the environment, ensures `runs/`, `outputs/`, `logs/` exist, runs a startup health check (`docker --version`, non-zero data file sizes), then speaks JSON-RPC on stdio.
-
-### From an MCP client
-
-Copy `examples/mcp/claude_desktop_config.example.json` into your MCP client's config (e.g. Claude Desktop) and update the `cwd` to the absolute repo path:
-
-```json
-{
-  "mcpServers": {
-    "presto": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "presto_mcp.server"],
-      "cwd": "C:/ABSOLUTE/PATH/TO/MCP-Server-Presto"
-    }
-  }
-}
-```
-
-### MCP Inspector (recommended for interactive debugging)
+**3. Try it in the MCP Inspector (no client setup)**
 
 ```bash
 npx @modelcontextprotocol/inspector uv run python -m presto_mcp.server
 ```
 
-In the Inspector UI:
-- `tools/list` should show all five `presto.*` tools.
-- Call `presto.readfile` with `{ "input_file": "57762_12049_J0532+3305_000022.fil" }`.
-- Call `presto.rfifind` with `{ "input_file": "57762_12049_J0532+3305_000022.fil", "time": 2.0 }`.
-- Read `presto://runs/<run_id>/manifest` after either call.
+**4. Ask your LLM (or call tools yourself)**
+
+Example prompts:
+
+- *“Run `presto.readfile` on `57762_12049_J0532+3305_000022.fil` and summarize the metadata.”*
+- *“Run `presto.rfifind` on that file with `time: 2.0`, then show the mask stats.”*
+- *“Plot a 2 s waterfall at DM 50 starting at t=10 s with `presto.waterfaller`.”*
+
+Paths are **relative to `data/`** (no absolute paths, no `..`). Outputs land in `runs/<run_id>/artifacts/` and are linked in the tool response.
+
+Long jobs (~60 s+ on large `.fil` files): pass `"background": true`, then poll `presto.get_run_manifest` with the returned `run_id` until `status` is `SUCCESS`, `FAILED`, or `TIMEOUT`.
+
+---
+
+## MCP tools
+
+| Tool | Purpose |
+|------|---------|
+| **Inspection** | |
+| `presto.readfile` | Parse filterbank / PSRFITS header metadata |
+| `presto.list_runs` | List recent runs (newest first) |
+| `presto.get_run_manifest` | Full manifest for one `run_id` |
+| **RFI & prep** | |
+| `presto.rfifind` | RFI search → `.mask`, `.rfi`, `.stats`, … |
+| `presto.prepdata` | Dedisperse one DM → `.dat` + `.inf` |
+| `presto.ddplan` | DM trial plan (no input file) |
+| `presto.prepsubband` | Dedisperse a DM range → many `.dat` files |
+| **Search & fold** | |
+| `presto.realfft` | FFT a `.dat` from a prior run → `.fft` |
+| `presto.accelsearch` | Fourier / acceleration search on `.fft` |
+| `presto.sifting` | Rank / dedupe ACCEL candidates |
+| `presto.prepfold` | Fold at known period + DM → `.pfd` |
+| `presto.single_pulse_search` | Bright single-pulse search on `.dat` file(s) |
+| `presto.zapbirds` | Apply zaplist to `.fft` |
+| **Timing & transients** | |
+| `presto.get_toas` | Times of arrival from `.pfd` + template |
+| `presto.rrattrap` | Group single-pulse events |
+| `presto.make_spd` | Build single-pulse diagnostic `.spd` |
+| `presto.plot_spd` | Render SPD plot (PNG/PS) |
+| `presto.waterfaller` | Dynamic-spectrum (waterfall) PNG around a candidate |
+
+**Chaining runs:** tools that consume prior outputs take paths like `<run_id>/artifacts/file.dat` relative to `runs/` (see each tool’s parameter docs in the Inspector or client).
+
+### MCP resources
+
+| URI | Contents |
+|-----|----------|
+| `presto://runs/{run_id}/manifest` | `manifest.json` |
+| `presto://runs/{run_id}/stdout` | PRESTO stdout |
+| `presto://runs/{run_id}/stderr` | PRESTO stderr |
+| `presto://runs/{run_id}/artifacts/{filename}` | One artifact (text inline; large/binary → JSON descriptor) |
+
+---
+
+## Prerequisites
+
+- **Python 3.11+**
+- [**uv**](https://github.com/astral-sh/uv)
+- **Docker** running on the host
+- Image: `docker pull alex88ridolfi/presto5:png`
+
+```bash
+docker run --rm alex88ridolfi/presto5:png which readfile rfifind prepfold
+```
+
+On Windows with OneDrive: ensure `data/` files are **“Always keep on this device”** (0-byte placeholders fail the startup check).
+
+---
+
+## Run the server manually
+
+```bash
+uv run python -m presto_mcp.server
+```
+
+Loads `PRESTO_*` from `.env` and the environment, creates `runs/`, `outputs/`, `logs/`, runs a health check, then speaks MCP over stdio.
 
 ---
 
 ## Tests
 
 ```bash
-# Unit + integration (no Docker required)
-uv run pytest -q
-
-# Lint
+uv run pytest -q              # unit + integration (no Docker)
 uv run ruff check .
-
-# End-to-end with real Docker + real data files
-uv run pytest -q tests/e2e --run-e2e
+uv run pytest -q tests/e2e --run-e2e   # real Docker + data/
 ```
 
-E2E tests are skipped by default. They invoke the PRESTO image with real data, write real run dirs, and assert the parsed metadata matches expectations from `data/57762_12049_J0532+3305_000022.fil`.
-
 ---
 
-## Layout of one run
+## One run on disk
 
 ```
-runs/
-└── 20260516T143052Z-K7QM3A/
-    ├── manifest.json
-    ├── stdout.log
-    ├── stderr.log
-    └── artifacts/
-        ├── rfi_rfifind.mask
-        ├── rfi_rfifind.rfi
-        ├── rfi_rfifind.stats
-        ├── rfi_rfifind.ps
-        ├── rfi_rfifind.bytemask
-        └── rfi_rfifind.inf
+runs/20260517T145912Z-OE2YWN/
+├── manifest.json    # docker argv, status, artifacts, timings
+├── stdout.log
+├── stderr.log
+└── artifacts/
+    └── waterfall.png
 ```
 
-`run_id` format: `YYYYMMDDTHHMMSSZ-<6-char base32>` (UTC + 30 bits entropy). Lexicographic order is chronological.
-
-The manifest records the full Docker argv, the PRESTO argv, the image (and digest if Docker provides one), CPU/memory caps, timeout, status, exit code, durations, and the list of artifacts.
+`run_id` format: `YYYYMMDDTHHMMSSZ-<6-char base32>` (UTC + entropy).
 
 ---
 
-## Security model (summary)
+## Security (summary)
 
-- All inputs go through `presto_mcp.path_security.resolve_input_path`: rejects absolute paths, `..` segments, case-folding tricks, and paths outside `DATA_DIR`.
-- All execution uses `subprocess.run(argv, shell=False, timeout=...)`. There is no `shell=True` and no generic `run_command` tool.
-- Every Docker invocation runs with `--network none`, `--security-opt no-new-privileges`, `--pids-limit 256`, `--cpus`, `--memory`, a named container, and `--rm`. `data/` mounts read-only.
-- Resource URIs revalidate path-traversal at read time. Large/binary artifacts return a JSON descriptor rather than the file body.
-- Errors are typed (`PathSecurityError`, `PolicyViolationError`, `DockerInvocationError`, `ParserError`, `ManifestError`); never raw stack traces.
+- Inputs validated by `path_security` — no absolute paths, no `..`, only under `DATA_DIR` or staged run artifacts.
+- Execution: `subprocess.run(argv, shell=False)` only; no generic shell tool.
+- Docker: `--network none`, `no-new-privileges`, `--pids-limit 256`, read-only `data/` bind.
+- Typed errors only — no raw stack traces to clients.
 
-Full design notes in [ARCHITECTURE.md](./ARCHITECTURE.md). Repo conventions for AI coding agents in [CLAUDE.md](./CLAUDE.md) and [AGENTS.md](./AGENTS.md).
-
----
-
-## Known limits (MVP)
-
-- **Binary PRESTO outputs are not parsed.** `.mask`, `.stats`, `.rfi`, `.pfd` are recorded as artifacts and exposed as resources, but never opened/decoded server-side.
-- **`prepfold` Mode A only.** Folding by accel-search candidate file (Mode B) is documented but not implemented — it requires upstream `accelsearch` plumbing which is out of scope.
-- **STDIO transport only.** Remote HTTP is deliberately deferred.
-- **No SQLite run index.** `presto.list_runs` walks `runs/*/manifest.json`. This is fine for thousands of runs; not for millions.
-- **Image is tag-pinned, not digest-pinned at install time.** The manifest captures the digest at runtime if Docker reports it.
-
-## Not in MVP
-
-- PulsarX, TransientX, riptide, Heimdall, PULSAR_MINER, DRAFTS++.
-- Workflow tools that chain `rfifind → prepsubband → accelsearch → prepfold`.
-- A Python executor or generic shell tool. (And we won't be adding one.)
+Details: [ARCHITECTURE.md](./ARCHITECTURE.md). Agent conventions: [AGENTS.md](./AGENTS.md).
 
 ---
 
-## Project files
+## Limits
 
-- `src/presto_mcp/server.py` — FastMCP entrypoint (the only file that imports FastMCP).
-- `src/presto_mcp/docker_backend.py` — argv builder + `subprocess.run` + timeout/kill.
-- `src/presto_mcp/path_security.py` — input-path traversal guards.
-- `src/presto_mcp/executor.py` — orchestrates one run (paths → backend → parse → manifest).
-- `src/presto_mcp/parsers/*` — PRESTO stdout parsers (MVP: stdout only).
-- `src/presto_mcp/tools/*` — one module per PRESTO binary.
-- `src/presto_mcp/resources.py` — MCP resource handlers.
-- `tests/fixtures/stdout/` — captured real PRESTO stdout for contract tests.
-- `tests/fakes/fake_docker_backend.py` — in-memory backend honoring `BackendProtocol`.
+- **Stdout parsers only** for structured fields; binary products (`.mask`, `.pfd`, PNGs) are artifacts/resources, not decoded server-side.
+- **`prepfold` Mode A** — known period + DM; accel-cand folding is not wired yet.
+- **STDIO only** — no HTTP transport.
+- **`list_runs`** walks `runs/*/manifest.json` (fine for thousands of runs).
+
+---
+
+## Project layout
+
+| Path | Role |
+|------|------|
+| `src/presto_mcp/server.py` | FastMCP entrypoint |
+| `src/presto_mcp/docker_backend.py` | Docker argv + subprocess |
+| `src/presto_mcp/path_security.py` | Path guards |
+| `src/presto_mcp/executor.py` | Run orchestration |
+| `src/presto_mcp/tools/` | One module per PRESTO tool |
+| `examples/mcp/` | Cursor / Claude Desktop config templates |
+| `data/` | Observation inputs (read-only, never committed if large) |
+
+---
 
 ## License
 
-MIT (see `pyproject.toml`).
+MIT — see `pyproject.toml`.
