@@ -308,3 +308,180 @@ class BackendResult(BaseModel):
     stderr: str
     duration_s: float
     error: str | None = None
+
+
+# -- Utility / navigation models (capabilities layer) ---------------------------
+
+DataFileLikelyType = Literal["filterbank", "fits", "psrfits", "text", "unknown"]
+
+
+class DataFileSummary(BaseModel):
+    relative_path: str
+    size_bytes: int
+    modified_at: datetime
+    extension: str | None = None
+    likely_type: DataFileLikelyType = "unknown"
+
+
+class ListDataFilesResult(BaseModel):
+    data_dir_label: str
+    count: int
+    files: list[DataFileSummary] = Field(default_factory=list)
+
+
+EnvironmentCheckStatus = Literal["OK", "WARN", "ERROR"]
+
+
+class EnvironmentCheck(BaseModel):
+    name: str
+    status: EnvironmentCheckStatus
+    message: str
+    remediation: str | None = None
+
+
+class ValidateEnvironmentResult(BaseModel):
+    status: EnvironmentCheckStatus
+    checks: list[EnvironmentCheck] = Field(default_factory=list)
+
+
+class ArtifactType(StrEnum):
+    RFI = "rfi"
+    TIME_SERIES = "time_series"
+    FFT = "fft"
+    ACCEL_CANDIDATES = "accel_candidates"
+    SINGLE_PULSE = "single_pulse"
+    SPD = "spd"
+    PLOTS = "plots"
+    FOLD = "fold"
+    TIMING = "timing"
+    OTHER = "other"
+
+
+class ArtifactSummary(BaseModel):
+    name: str
+    size_bytes: int
+    modified_at: datetime
+    likely_type: ArtifactType = ArtifactType.OTHER
+    resource_uri: str
+    is_inline_readable: bool = False
+
+
+class InspectArtifactsResult(BaseModel):
+    run_id: str
+    artifacts: list[ArtifactSummary] = Field(default_factory=list)
+
+
+class RunStructuredSummary(BaseModel):
+    run_id: str
+    tool: str
+    status: RunStatus
+    started_at: datetime
+    duration_s: float | None = None
+    exit_code: int | None = None
+    error: str | None = None
+    inputs: dict[str, str] = Field(default_factory=dict)
+    artifact_counts: dict[ArtifactType, int] = Field(default_factory=dict)
+    artifacts_by_type: dict[ArtifactType, list[str]] = Field(default_factory=dict)
+    next_suggested_tools: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+# -- Additional PRESTO tool result schemas (data prep / RFI / fold QC / advanced)
+
+
+class Psrfits2FilResult(BaseModel):
+    input_file: str
+    output_prefix: str
+    fil_files: list[str] = Field(default_factory=list)
+    inf_files: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class DownsampleFilterbankResult(BaseModel):
+    input_file: str
+    factor: int
+    output_file: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class FbTruncateResult(BaseModel):
+    input_file: str
+    output_file: str | None = None
+    output_prefix: str
+    start_sample: int | None = None
+    num_samples: int | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class RfifindStatsResult(BaseModel):
+    stats_file: str
+    mask_file: str | None = None
+    summary_file: str | None = None
+    bad_channels: list[int] = Field(default_factory=list)
+    bad_intervals: list[int] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class Pfd2PngResult(BaseModel):
+    pfd_file: str
+    png_file: str | None = None
+    ps_file: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class PfdZapResult(BaseModel):
+    pfd_file: str
+    output_pfd_file: str | None = None
+    zap_commands_file: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class MakeZaplistResult(BaseModel):
+    input_file: str
+    zaplist_file: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class WeightsToIgnorechanResult(BaseModel):
+    weights_file: str
+    ignorechan_file: str | None = None
+    ignore_channels: list[int] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class FourierFoldProfileSummary(BaseModel):
+    period_s: float | None = None
+    frequency_hz: float | None = None
+    dm: float | None = None
+    num_bins: int | None = None
+
+
+class FourierFoldResult(BaseModel):
+    fft_file: str
+    profile_file: str | None = None
+    plot_file: str | None = None
+    summary: FourierFoldProfileSummary | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class SumProfilesResult(BaseModel):
+    input_profile_files: list[str] = Field(default_factory=list)
+    output_profile_file: str | None = None
+    plot_file: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class SearchBinCandidate(BaseModel):
+    cand_num: int | None = None
+    frequency_hz: float | None = None
+    period_ms: float | None = None
+    sigma: float | None = None
+    orb_p_s: float | None = None
+    note: str | None = None
+
+
+class SearchBinResult(BaseModel):
+    fft_file: str
+    candidate_files: list[str] = Field(default_factory=list)
+    top_candidates: list[SearchBinCandidate] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)

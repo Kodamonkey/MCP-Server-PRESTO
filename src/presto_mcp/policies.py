@@ -7,6 +7,8 @@ the clamped/coerced value on success. Keep these dumb and explicit — no
 
 from __future__ import annotations
 
+import re
+
 from .errors import PolicyViolationError
 
 MIN_TIMEOUT_S = 1
@@ -426,3 +428,159 @@ def check_output_prefix(prefix: str) -> str:
             f"output_prefix contains forbidden characters: {bad!r}"
         )
     return prefix
+
+
+# -- data prep / RFI / fold QC / advanced ------------------------------------
+
+DOWNSAMPLE_FACTOR_MIN = 2
+DOWNSAMPLE_FACTOR_MAX = 1024
+
+TRUNCATE_START_SAMPLE_MIN = 0
+TRUNCATE_START_SAMPLE_MAX = 10**12
+TRUNCATE_NUM_SAMPLES_MIN = 1
+TRUNCATE_NUM_SAMPLES_MAX = 10**10
+TRUNCATE_START_S_MIN = 0.0
+TRUNCATE_START_S_MAX = 86_400.0
+TRUNCATE_DURATION_S_MIN = 1e-6
+TRUNCATE_DURATION_S_MAX = 86_400.0
+
+PROFILE_FILE_COUNT_MIN = 1
+PROFILE_FILE_COUNT_MAX = 4096
+
+FREQUENCY_HZ_MIN = 1e-9
+FREQUENCY_HZ_MAX = 1e9
+
+PFDZAP_TOKEN_MAX = 512
+_PFDZAP_TOKEN_RE = re.compile(r"^\d+:\d+$")
+
+SEARCH_BIN_FREQ_MIN_HZ = 0.0
+SEARCH_BIN_FREQ_MAX_HZ = 5.0e5
+
+
+def check_downsample_factor(n: int) -> int:
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"downsample factor must be int, got {type(n).__name__}")
+    if not (DOWNSAMPLE_FACTOR_MIN <= n <= DOWNSAMPLE_FACTOR_MAX):
+        raise PolicyViolationError(
+            f"downsample factor {n} outside "
+            f"[{DOWNSAMPLE_FACTOR_MIN}, {DOWNSAMPLE_FACTOR_MAX}]"
+        )
+    return n
+
+
+def check_truncate_start_sample(n: int) -> int:
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"start_sample must be int, got {type(n).__name__}")
+    if not (TRUNCATE_START_SAMPLE_MIN <= n <= TRUNCATE_START_SAMPLE_MAX):
+        raise PolicyViolationError(
+            f"start_sample {n} outside "
+            f"[{TRUNCATE_START_SAMPLE_MIN}, {TRUNCATE_START_SAMPLE_MAX}]"
+        )
+    return n
+
+
+def check_truncate_num_samples(n: int) -> int:
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"num_samples must be int, got {type(n).__name__}")
+    if not (TRUNCATE_NUM_SAMPLES_MIN <= n <= TRUNCATE_NUM_SAMPLES_MAX):
+        raise PolicyViolationError(
+            f"num_samples {n} outside "
+            f"[{TRUNCATE_NUM_SAMPLES_MIN}, {TRUNCATE_NUM_SAMPLES_MAX}]"
+        )
+    return n
+
+
+def check_truncate_start_s(s: float) -> float:
+    f = float(s)
+    if not (TRUNCATE_START_S_MIN <= f <= TRUNCATE_START_S_MAX):
+        raise PolicyViolationError(
+            f"start_s {s} outside [{TRUNCATE_START_S_MIN}, {TRUNCATE_START_S_MAX}]"
+        )
+    return f
+
+
+def check_truncate_duration_s(s: float) -> float:
+    f = float(s)
+    if not (TRUNCATE_DURATION_S_MIN <= f <= TRUNCATE_DURATION_S_MAX):
+        raise PolicyViolationError(
+            f"duration_s {s} outside "
+            f"[{TRUNCATE_DURATION_S_MIN}, {TRUNCATE_DURATION_S_MAX}]"
+        )
+    return f
+
+
+def check_profile_file_count(files: list[str]) -> list[str]:
+    if not isinstance(files, list):
+        raise PolicyViolationError(
+            f"profile_files must be list, got {type(files).__name__}"
+        )
+    n = len(files)
+    if n < PROFILE_FILE_COUNT_MIN:
+        raise PolicyViolationError("sum_profiles requires at least one profile file")
+    if n > PROFILE_FILE_COUNT_MAX:
+        raise PolicyViolationError(
+            f"sum_profiles input count {n} exceeds cap {PROFILE_FILE_COUNT_MAX}"
+        )
+    return files
+
+
+def check_frequency_hz(f_hz: float) -> float:
+    f = float(f_hz)
+    if not (FREQUENCY_HZ_MIN <= f <= FREQUENCY_HZ_MAX):
+        raise PolicyViolationError(
+            f"frequency_hz {f_hz} outside [{FREQUENCY_HZ_MIN}, {FREQUENCY_HZ_MAX}]"
+        )
+    return f
+
+
+def check_fourier_fold_period_or_freq(
+    period_s: float | None, frequency_hz: float | None
+) -> tuple[float | None, float | None]:
+    """Exactly one of (period_s, frequency_hz) must be set; both validated."""
+    if (period_s is None) == (frequency_hz is None):
+        raise PolicyViolationError(
+            "fourier_fold requires exactly one of period_s or frequency_hz"
+        )
+    p = check_prepfold_period(period_s) if period_s is not None else None
+    f = check_frequency_hz(frequency_hz) if frequency_hz is not None else None
+    return p, f
+
+
+def check_pfdzap_commands(cmds: list[str] | None) -> list[str] | None:
+    if cmds is None:
+        return None
+    if not isinstance(cmds, list):
+        raise PolicyViolationError(
+            f"zap_commands must be list[str], got {type(cmds).__name__}"
+        )
+    if len(cmds) > PFDZAP_TOKEN_MAX:
+        raise PolicyViolationError(
+            f"pfdzap commands ({len(cmds)}) exceed cap {PFDZAP_TOKEN_MAX}"
+        )
+    bad: list[str] = []
+    for c in cmds:
+        if not isinstance(c, str) or not _PFDZAP_TOKEN_RE.match(c):
+            bad.append(repr(c))
+    if bad:
+        raise PolicyViolationError(
+            f"pfdzap commands must match '<low>:<high>'; bad tokens: {bad[:5]}"
+        )
+    return cmds
+
+
+def check_search_bin_freq_range(
+    low_hz: float | None, high_hz: float | None
+) -> tuple[float | None, float | None]:
+    """Optional band; if both provided, validate ordering + range."""
+    if low_hz is None and high_hz is None:
+        return None, None
+    if low_hz is None or high_hz is None:
+        raise PolicyViolationError("search_bin band requires both low_hz and high_hz")
+    lo = float(low_hz)
+    hi = float(high_hz)
+    if not (SEARCH_BIN_FREQ_MIN_HZ <= lo < hi <= SEARCH_BIN_FREQ_MAX_HZ):
+        raise PolicyViolationError(
+            f"search_bin band [{lo}, {hi}] invalid; require "
+            f"{SEARCH_BIN_FREQ_MIN_HZ} <= low < high <= {SEARCH_BIN_FREQ_MAX_HZ}"
+        )
+    return lo, hi

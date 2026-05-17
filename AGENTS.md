@@ -23,6 +23,12 @@ Typed MCP server that exposes **PRESTO** (radio-astronomy / pulsar) routines to 
 5. **Every run writes a manifest.** Even when the tool fails or times out. Includes `docker_argv`, `presto_argv`, `exit_code`, `status`, durations, artifact list.
 6. **Every tool returns structured output.** `ToolRunResult[T]` Pydantic model. MCP resource URIs for manifest/stdout/stderr/artifacts.
 7. **Errors are typed.** `PathSecurityError`, `DockerInvocationError`, `ParserError`, `PolicyViolationError` → MCP error payloads. Never leak raw stack traces.
+8. **No LangGraph (or other orchestration framework) inside this MCP server.** Stateful / adaptive workflows belong to a separate layer above this MCP. The server only ships atomic capabilities, navigable state, and guidance prompts.
+9. **MCP prompts are guidance, not pipelines.** A prompt returns text telling the client which tools to call. It must not invoke any tool, read a file, or call Docker.
+10. **Utility tools never execute arbitrary shell.** Tools like `presto.list_data_files`, `presto.validate_environment`, `presto.summarize_run`, `presto.inspect_artifacts` may stat the filesystem and (only for `validate_environment`) probe `docker --version` / `docker image inspect` via `subprocess.run(argv, shell=False, timeout=…)`. Nothing else.
+11. **Do not duplicate existing PRESTO tools.** Each PRESTO binary already has one typed wrapper under `src/presto_mcp/tools/`. New work extends utility/navigation/prompt surfaces, not the PRESTO surface.
+12. **Prefer curated, typed wrappers to indiscriminate PRESTO coverage.** Not every PRESTO routine deserves an MCP tool — pick ones with clear inputs/outputs, validate them, and ship tests. Untyped catch-alls are out of scope.
+13. **New routines must be verified against the configured Docker image before being marked `stable`.** Default to `[experimental]` (or `[advanced]`) in the `@mcp.tool` description until an E2E smoke (or a `presto.validate_environment` run) confirms availability in `alex88ridolfi/presto5:png` (or the configured successor).
 
 ## What NOT to touch
 

@@ -14,6 +14,12 @@ Typed, sandboxed MCP server that exposes **PRESTO** (pulsar / radio-astronomy) r
 - **Every invocation writes `runs/<run_id>/manifest.json`** — even on failure / timeout. `stdout.log` and `stderr.log` are always persisted.
 - **Every MCP tool returns `structuredContent`.** Plus a brief human string. Plus MCP resource URIs for manifest/stdout/stderr/artifacts.
 - **Controlled errors.** Surface `PathSecurityError`, `DockerInvocationError`, `ParserError`, `PolicyViolationError` as MCP error payloads — not raw stack traces.
+- **No LangGraph in MCP.** Adaptive / stateful orchestration belongs to a future layer above this MCP. The server provides atomic capabilities only.
+- **Prompts are guidance, not pipelines.** MCP prompts return text instructing the client which tools to call. A prompt never invokes a tool itself.
+- **Utility tools never run arbitrary shell.** `presto.list_data_files`, `presto.validate_environment`, `presto.summarize_run`, `presto.inspect_artifacts` stat the filesystem and (only `validate_environment`) probe `docker --version` / `docker image inspect`. Never anything else.
+- **No duplication of PRESTO tools.** New work extends utilities / resources / prompts. Each PRESTO binary already has its typed wrapper under `src/presto_mcp/tools/`.
+- **Prefer curated typed wrappers to indiscriminate PRESTO coverage.** Only ship tools with clear inputs/outputs, tests, and parser fallbacks (`notes: list[str]` in the result model).
+- **Verify new routines against the configured Docker image before marking them `stable`.** Default to `[experimental]` / `[advanced]` in the `@mcp.tool` description until availability in `alex88ridolfi/presto5:png` (or the pinned successor) is confirmed via `presto.validate_environment` or an E2E smoke test.
 
 ## Stack
 

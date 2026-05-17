@@ -21,12 +21,14 @@ Put observation files in `data/` (or set `PRESTO_DATA_DIR` in `.env` — copy fr
 
 **2. Connect an MCP client**
 
-| Client | What to do |
-|--------|------------|
-| **Cursor** | Copy [`examples/mcp/cursor_mcp.example.json`](examples/mcp/cursor_mcp.example.json) → `.cursor/mcp.json`, replace `REPLACE_WITH_REPO_ROOT` with the absolute repo path, enable **presto** in Settings → MCP. |
-| **Claude Desktop** | Merge the `presto` block from [`examples/mcp/claude_desktop_config.example.json`](examples/mcp/claude_desktop_config.example.json) into your MCP config; same path replacement. Restart the app. |
 
-More detail (Windows paths, venv fallback): [`examples/mcp/README.md`](examples/mcp/README.md).
+| Client             | What to do                                                                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Cursor**         | Copy `[examples/mcp/cursor_mcp.example.json](examples/mcp/cursor_mcp.example.json)` → `.cursor/mcp.json`, replace `REPLACE_WITH_REPO_ROOT` with the absolute repo path, enable **presto** in Settings → MCP. |
+| **Claude Desktop** | Merge the `presto` block from `[examples/mcp/claude_desktop_config.example.json](examples/mcp/claude_desktop_config.example.json)` into your MCP config; same path replacement. Restart the app.             |
+
+
+More detail (Windows paths, venv fallback): `[examples/mcp/README.md](examples/mcp/README.md)`.
 
 **3. Try it in the MCP Inspector (no client setup)**
 
@@ -50,48 +52,69 @@ Long jobs (~60 s+ on large `.fil` files): pass `"background": true`, then poll `
 
 ## MCP tools
 
-| Tool | Purpose |
-|------|---------|
-| **Inspection** | |
-| `presto.readfile` | Parse filterbank / PSRFITS header metadata |
-| `presto.list_runs` | List recent runs (newest first) |
-| `presto.get_run_manifest` | Full manifest for one `run_id` |
-| **RFI & prep** | |
-| `presto.rfifind` | RFI search → `.mask`, `.rfi`, `.stats`, … |
-| `presto.prepdata` | Dedisperse one DM → `.dat` + `.inf` |
-| `presto.ddplan` | DM trial plan (no input file) |
-| `presto.prepsubband` | Dedisperse a DM range → many `.dat` files |
-| **Search & fold** | |
-| `presto.realfft` | FFT a `.dat` from a prior run → `.fft` |
-| `presto.accelsearch` | Fourier / acceleration search on `.fft` |
-| `presto.sifting` | Rank / dedupe ACCEL candidates |
-| `presto.prepfold` | Fold at known period + DM → `.pfd` |
-| `presto.single_pulse_search` | Bright single-pulse search on `.dat` file(s) |
-| `presto.zapbirds` | Apply zaplist to `.fft` |
-| **Timing & transients** | |
-| `presto.get_toas` | Times of arrival from `.pfd` + template |
-| `presto.rrattrap` | Group single-pulse events |
-| `presto.make_spd` | Build single-pulse diagnostic `.spd` |
-| `presto.plot_spd` | Render SPD plot (PNG/PS) |
-| `presto.waterfaller` | Dynamic-spectrum (waterfall) PNG around a candidate |
+
+| Tool                         | Purpose                                             |
+| ---------------------------- | --------------------------------------------------- |
+| **Inspection**               |                                                     |
+| `presto.readfile`            | Parse filterbank / PSRFITS header metadata          |
+| `presto.list_runs`           | List recent runs (newest first)                     |
+| `presto.get_run_manifest`    | Full manifest for one `run_id`                      |
+| **RFI & prep**               |                                                     |
+| `presto.rfifind`             | RFI search → `.mask`, `.rfi`, `.stats`, …           |
+| `presto.prepdata`            | Dedisperse one DM → `.dat` + `.inf`                 |
+| `presto.ddplan`              | DM trial plan (no input file)                       |
+| `presto.prepsubband`         | Dedisperse a DM range → many `.dat` files           |
+| **Search & fold**            |                                                     |
+| `presto.realfft`             | FFT a `.dat` from a prior run → `.fft`              |
+| `presto.accelsearch`         | Fourier / acceleration search on `.fft`             |
+| `presto.sifting`             | Rank / dedupe ACCEL candidates                      |
+| `presto.prepfold`            | Fold at known period + DM → `.pfd`                  |
+| `presto.single_pulse_search` | Bright single-pulse search on `.dat` file(s)        |
+| `presto.zapbirds`            | Apply zaplist to `.fft`                             |
+| **Timing & transients**      |                                                     |
+| `presto.get_toas`            | Times of arrival from `.pfd` + template             |
+| `presto.rrattrap`            | Group single-pulse events                           |
+| `presto.make_spd`            | Build single-pulse diagnostic `.spd`                |
+| `presto.plot_spd`            | Render SPD plot (PNG/PS)                            |
+| `presto.waterfaller`         | Dynamic-spectrum (waterfall) PNG around a candidate |
+| **Data prep (new)**          |                                                     |
+| `presto.psrfits2fil`         | PSRFITS → SIGPROC `.fil`                            |
+| `presto.downsample_filterbank` | Factor-downsample a `.fil` (debug / fast iter)    |
+| `presto.fb_truncate`         | Cut a sample window from a `.fil`                   |
+| **RFI (new)**                |                                                     |
+| `presto.rfifind_stats`       | Structured `bad_channels` / `bad_intervals` summary |
+| `presto.weights_to_ignorechan` *(experimental)* | `.weights`/`.mask` → ignorechan list |
+| `presto.makezaplist` *(experimental)* | Build `.zaplist` from `.birds`             |
+| **Fold QC (new)**            |                                                     |
+| `presto.pfd2png` *(experimental)* | `.pfd` → PNG/PS (image-dependent)              |
+| `presto.pfdzap` *(experimental)* | Strict interval/channel zapping of a `.pfd`     |
+| **Advanced (new)**           |                                                     |
+| `presto.fourier_fold` *(experimental)* | Fold `.fft` at known (period\|freq, dm)    |
+| `presto.sum_profiles` *(experimental)* | Combine multiple `.bestprof` / `.prof`     |
+| `presto.search_bin` *(advanced)* | Phase-modulation / sideband search for binaries |
+
+
+Tools tagged *(experimental)* / *(advanced)* may not be available in every PRESTO image — run `presto.validate_environment` first.
 
 **Chaining runs:** tools that consume prior outputs take paths like `<run_id>/artifacts/file.dat` relative to `runs/` (see each tool’s parameter docs in the Inspector or client).
 
 ### MCP resources
 
-| URI | Contents |
-|-----|----------|
-| `presto://runs/{run_id}/manifest` | `manifest.json` |
-| `presto://runs/{run_id}/stdout` | PRESTO stdout |
-| `presto://runs/{run_id}/stderr` | PRESTO stderr |
+
+| URI                                           | Contents                                                   |
+| --------------------------------------------- | ---------------------------------------------------------- |
+| `presto://runs/{run_id}/manifest`             | `manifest.json`                                            |
+| `presto://runs/{run_id}/stdout`               | PRESTO stdout                                              |
+| `presto://runs/{run_id}/stderr`               | PRESTO stderr                                              |
 | `presto://runs/{run_id}/artifacts/{filename}` | One artifact (text inline; large/binary → JSON descriptor) |
+
 
 ---
 
 ## Prerequisites
 
 - **Python 3.11+**
-- [**uv**](https://github.com/astral-sh/uv)
+- **[uv](https://github.com/astral-sh/uv)**
 - **Docker** running on the host
 - Image: `docker pull alex88ridolfi/presto5:png`
 
@@ -138,6 +161,41 @@ runs/20260517T145912Z-OE2YWN/
 
 ---
 
+## Utilities, resources and prompts
+
+Beyond the PRESTO-binary tools, the server exposes utility tools, navigation resources, and MCP prompts.
+
+**Utility tools** (no Docker, no PRESTO execution) — see [TOOLS.md](./TOOLS.md):
+
+```text
+presto.validate_environment    # OK/WARN/ERROR per-check report (settings, dirs, docker, image, policies)
+presto.list_data_files         # index files under PRESTO_DATA_DIR
+presto.summarize_run           # structured per-run summary + next_suggested_tools
+presto.inspect_artifacts       # per-artifact index with resource URIs
+```
+
+Quick check from Inspector:
+
+```text
+presto.validate_environment(check_image=true)
+presto.list_data_files(limit=20, extensions=[".fil",".fits"])
+```
+
+**Navigation resources** — see [RESOURCES.md](./RESOURCES.md):
+
+```text
+presto://data                              # JSON index of DATA_DIR
+presto://runs                              # JSON index of recent runs
+presto://runs/{run_id}/summary             # RunStructuredSummary JSON
+presto://runs/{run_id}/artifacts           # ArtifactSummary list (no contents)
+```
+
+**Prompts** — see [PROMPTS.md](./PROMPTS.md). Six guidance prompts (`presto.inspect_observation_plan`, `presto.single_pulse_search_plan`, `presto.periodic_search_plan`, `presto.fold_known_candidate_plan`, `presto.explain_failed_run`, `presto.generate_candidate_report_plan`). They appear automatically in MCP Inspector and any client that surfaces prompts. **Prompts are guidance — the MCP server does not orchestrate or auto-execute.**
+
+**Separation of responsibilities.** The MCP layer ships atomic, sandboxed capabilities (tools), navigable state (resources), and reusable guidance (prompts). Stateful / adaptive orchestration (looping over candidates, branching on results, retries with parameter tweaks) belongs to a future LangGraph (or equivalent) layer above this MCP — not inside it.
+
+---
+
 ## Security (summary)
 
 - Inputs validated by `path_security` — no absolute paths, no `..`, only under `DATA_DIR` or staged run artifacts.
@@ -152,23 +210,25 @@ Details: [ARCHITECTURE.md](./ARCHITECTURE.md). Agent conventions: [AGENTS.md](./
 ## Limits
 
 - **Stdout parsers only** for structured fields; binary products (`.mask`, `.pfd`, PNGs) are artifacts/resources, not decoded server-side.
-- **`prepfold` Mode A** — known period + DM; accel-cand folding is not wired yet.
+- `**prepfold` Mode A** — known period + DM; accel-cand folding is not wired yet.
 - **STDIO only** — no HTTP transport.
-- **`list_runs`** walks `runs/*/manifest.json` (fine for thousands of runs).
+- `**list_runs`** walks `runs/*/manifest.json` (fine for thousands of runs).
 
 ---
 
 ## Project layout
 
-| Path | Role |
-|------|------|
-| `src/presto_mcp/server.py` | FastMCP entrypoint |
-| `src/presto_mcp/docker_backend.py` | Docker argv + subprocess |
-| `src/presto_mcp/path_security.py` | Path guards |
-| `src/presto_mcp/executor.py` | Run orchestration |
-| `src/presto_mcp/tools/` | One module per PRESTO tool |
-| `examples/mcp/` | Cursor / Claude Desktop config templates |
-| `data/` | Observation inputs (read-only, never committed if large) |
+
+| Path                               | Role                                                     |
+| ---------------------------------- | -------------------------------------------------------- |
+| `src/presto_mcp/server.py`         | FastMCP entrypoint                                       |
+| `src/presto_mcp/docker_backend.py` | Docker argv + subprocess                                 |
+| `src/presto_mcp/path_security.py`  | Path guards                                              |
+| `src/presto_mcp/executor.py`       | Run orchestration                                        |
+| `src/presto_mcp/tools/`            | One module per PRESTO tool                               |
+| `examples/mcp/`                    | Cursor / Claude Desktop config templates                 |
+| `data/`                            | Observation inputs (read-only, never committed if large) |
+
 
 ---
 

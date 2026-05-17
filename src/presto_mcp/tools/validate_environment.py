@@ -1,0 +1,254 @@
+"""Utility tool: validate local environment without running PRESTO.
+
+Returns a structured per-check report. Never raises; failures are captured as
+individual ``EnvironmentCheck`` entries. All subprocess calls use ``shell=False``
+with explicit argv and a short timeout.
+"""
+
+from __future__ import annotations
+
+import logging
+import shutil
+import subprocess
+from pathlib import Path
+
+from ..config import Settings, get_settings
+from ..models import EnvironmentCheck, EnvironmentCheckStatus, ValidateEnvironmentResult
+
+log = logging.getLogger("presto_mcp.tools.validate_environment")
+
+_DOCKER_PROBE_TIMEOUT_S = 5
+_IMAGE_PROBE_TIMEOUT_S = 10
+_STATUS_RANK: dict[EnvironmentCheckStatus, int] = {"OK": 0, "WARN": 1, "ERROR": 2}
+
+
+def _aggregate(checks: list[EnvironmentCheck]) -> EnvironmentCheckStatus:
+    if not checks:
+        return "OK"
+    worst = max(_STATUS_RANK[c.status] for c in checks)
+    for status, rank in _STATUS_RANK.items():
+        if rank == worst:
+            return status
+    return "OK"
+
+
+def _check_settings_loaded(settings: Settings | None) -> tuple[Settings | None, EnvironmentCheck]:
+    try:
+        s = settings or get_settings()
+    except Exception as e:  # noqa: BLE001
+        return None, EnvironmentCheck(
+            name="settings.load",
+            status="ERROR",
+            message=f"failed to load settings: {e}",
+            remediation="Check .env and PRESTO_* environment variables.",
+        )
+    return s, EnvironmentCheck(
+        name="settings.load",
+        status="OK",
+        message=f"image={s.image} data_dir=<set> runs_dir=<set>",
+    )
+
+
+def _check_data_dir(s: Settings) -> list[EnvironmentCheck]:
+    checks: list[EnvironmentCheck] = []
+    if not s.data_dir.is_dir():
+        checks.append(
+            EnvironmentCheck(
+                name="data_dir.exists",
+                status="ERROR",
+                message="PRESTO_DATA_DIR does not exist",
+                remediation="Create the directory or set PRESTO_DATA_DIR to a valid path.",
+            )
+        )
+        return checks
+
+    checks.append(
+        EnvironmentCheck(name="data_dir.exists", status="OK", message="exists")
+    )
+
+    has_files = False
+    placeholders: list[str] = []
+    try:
+        for p in s.data_dir.iterdir():
+            if not p.is_file() or p.name.startswith("."):
+                continue
+            has_files = True
+            try:
+                if p.stat().st_size == 0:
+                    placeholders.append(p.name)
+            except OSError:
+                continue
+    except OSError as e:
+        checks.append(
+            EnvironmentCheck(
+                name="data_dir.scan",
+                status="WARN",
+                message=f"could not scan data_dir: {e}",
+            )
+        )
+        return checks
+
+    if not has_files:
+        checks.append(
+            EnvironmentCheck(
+                name="data_dir.has_files",
+                status="WARN",
+                message="data_dir contains no observation files",
+                remediation="Drop at least one .fil/.fits/.sf under PRESTO_DATA_DIR.",
+            )
+        )
+    else:
+        checks.append(
+            EnvironmentCheck(name="data_dir.has_files", status="OK", message="contains files")
+        )
+
+    if placeholders:
+        names = ", ".join(placeholders[:5]) + (" ..." if len(placeholders) > 5 else "")
+        checks.append(
+            EnvironmentCheck(
+                name="data_dir.zero_byte_files",
+                status="WARN",
+                message=f"zero-byte files (likely OneDrive placeholders): {names}",
+                remediation=(
+                    "In Windows Explorer right-click data/ → 'Always keep on this "
+                    "device' and wait for sync to finish."
+                ),
+            )
+        )
+    return checks
+
+
+def _check_writable_dir(name: str, path: Path) -> EnvironmentCheck:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return EnvironmentCheck(
+            name=f"{name}.writable",
+            status="ERROR",
+            message=f"cannot create {path}: {e}",
+            remediation=f"Set PRESTO_{name.upper()}_DIR to a writable path.",
+        )
+    return EnvironmentCheck(
+        name=f"{name}.writable", status="OK", message="exists / created"
+    )
+
+
+def _check_docker_cli() -> tuple[str | None, EnvironmentCheck]:
+    docker = shutil.which("docker")
+    if not docker:
+        return None, EnvironmentCheck(
+            name="docker.cli",
+            status="ERROR",
+            message="docker CLI not found on PATH",
+            remediation="Install Docker Desktop and ensure 'docker' is on PATH.",
+        )
+    try:
+        cp = subprocess.run(
+            [docker, "--version"],
+            check=False,
+            capture_output=True,
+            timeout=_DOCKER_PROBE_TIMEOUT_S,
+            shell=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return docker, EnvironmentCheck(
+            name="docker.version",
+            status="ERROR",
+            message=f"`docker --version` failed: {e}",
+            remediation="Start Docker Desktop / the docker daemon.",
+        )
+    if cp.returncode != 0:
+        return docker, EnvironmentCheck(
+            name="docker.version",
+            status="ERROR",
+            message=f"`docker --version` exit={cp.returncode}",
+            remediation="Start Docker Desktop / the docker daemon.",
+        )
+    version = (cp.stdout or b"").decode("utf-8", errors="replace").strip()
+    return docker, EnvironmentCheck(
+        name="docker.version", status="OK", message=version or "ok"
+    )
+
+
+def _check_image(docker: str, image: str) -> EnvironmentCheck:
+    try:
+        cp = subprocess.run(
+            [docker, "image", "inspect", image],
+            check=False,
+            capture_output=True,
+            timeout=_IMAGE_PROBE_TIMEOUT_S,
+            shell=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return EnvironmentCheck(
+            name="docker.image",
+            status="WARN",
+            message=f"image inspect failed: {e}",
+            remediation=f"docker pull {image}",
+        )
+    if cp.returncode != 0:
+        return EnvironmentCheck(
+            name="docker.image",
+            status="WARN",
+            message=f"image not present locally: {image}",
+            remediation=f"docker pull {image}",
+        )
+    return EnvironmentCheck(
+        name="docker.image", status="OK", message=f"present: {image}"
+    )
+
+
+def _check_policies(s: Settings) -> EnvironmentCheck:
+    issues: list[str] = []
+    if s.default_cpus <= 0:
+        issues.append("default_cpus <= 0")
+    if s.default_memory_mb < 512:
+        issues.append("default_memory_mb < 512")
+    if s.default_timeout_s < 30:
+        issues.append("default_timeout_s < 30")
+    if issues:
+        return EnvironmentCheck(
+            name="policy.defaults",
+            status="WARN",
+            message="; ".join(issues),
+            remediation="Adjust PRESTO_DEFAULT_CPUS / MEMORY_MB / TIMEOUT_SECONDS.",
+        )
+    return EnvironmentCheck(
+        name="policy.defaults",
+        status="OK",
+        message=(
+            f"cpus={s.default_cpus} memory_mb={s.default_memory_mb} "
+            f"timeout_s={s.default_timeout_s}"
+        ),
+    )
+
+
+def run_validate_environment(
+    *,
+    check_image: bool = True,
+    settings: Settings | None = None,
+) -> ValidateEnvironmentResult:
+    checks: list[EnvironmentCheck] = []
+
+    s, settings_check = _check_settings_loaded(settings)
+    checks.append(settings_check)
+    if s is None:
+        return ValidateEnvironmentResult(status=_aggregate(checks), checks=checks)
+
+    checks.extend(_check_data_dir(s))
+    checks.append(_check_writable_dir("runs", s.runs_dir))
+    checks.append(_check_writable_dir("outputs", s.outputs_dir))
+    checks.append(_check_writable_dir("logs", s.logs_dir))
+
+    docker, docker_check = _check_docker_cli()
+    checks.append(docker_check)
+
+    if docker is not None and check_image:
+        checks.append(_check_image(docker, s.image))
+
+    checks.append(_check_policies(s))
+
+    return ValidateEnvironmentResult(status=_aggregate(checks), checks=checks)
+
+
+__all__ = ["run_validate_environment"]

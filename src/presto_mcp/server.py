@@ -22,6 +22,7 @@ sandboxing, and orchestration live in the modules under ``presto_mcp/``.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Annotated
@@ -43,40 +44,84 @@ from .errors import (
 from .models import (
     AccelsearchResult,
     DDplanResult,
+    DownsampleFilterbankResult,
+    FbTruncateResult,
+    FourierFoldResult,
     GetTOAsResult,
+    InspectArtifactsResult,
+    ListDataFilesResult,
     MakeSpdResult,
+    MakeZaplistResult,
+    Pfd2PngResult,
+    PfdZapResult,
     PlotSpdResult,
     PrepdataResult,
     PrepfoldResult,
     PrepsubbandResult,
+    Psrfits2FilResult,
     ReadfileMetadata,
     RealfftResult,
+    RfifindStatsResult,
     RfifindSummary,
     RrattrapResult,
     RunManifest,
+    RunStructuredSummary,
     RunSummary,
+    SearchBinResult,
     SiftingResult,
     SinglePulseSearchResult,
+    SumProfilesResult,
     ToolRunResult,
+    ValidateEnvironmentResult,
     WaterfallerResult,
+    WeightsToIgnorechanResult,
     ZapbirdsResult,
+)
+from .prompts import (
+    build_explain_failed_run,
+    build_fold_known_candidate_plan,
+    build_fold_qc_plan,
+    build_generate_candidate_report_plan,
+    build_inspect_observation_plan,
+    build_periodic_advanced_search_plan,
+    build_periodic_search_plan,
+    build_prepare_filterbank_plan,
+    build_rfi_mitigation_plan,
+    build_single_pulse_full_plan,
+    build_single_pulse_search_plan,
+    build_tool_selection_guide,
 )
 from .tools import list_runs as list_runs_tool
 from .tools.accelsearch import run_accelsearch
 from .tools.ddplan import run_ddplan
+from .tools.downsample_filterbank import run_downsample_filterbank
+from .tools.fb_truncate import run_fb_truncate
+from .tools.fourier_fold import run_fourier_fold
 from .tools.get_toas import run_get_toas
+from .tools.list_data_files import run_list_data_files
 from .tools.make_spd import run_make_spd
+from .tools.makezaplist import run_makezaplist
+from .tools.pfd2png import run_pfd2png
+from .tools.pfdzap import run_pfdzap
 from .tools.plot_spd import run_plot_spd
 from .tools.prepdata import run_prepdata
 from .tools.prepfold import run_prepfold
 from .tools.prepsubband import run_prepsubband
+from .tools.psrfits2fil import run_psrfits2fil
 from .tools.readfile import run_readfile
 from .tools.realfft import run_realfft
 from .tools.rfifind import run_rfifind
+from .tools.rfifind_stats import run_rfifind_stats
 from .tools.rrattrap import run_rrattrap
+from .tools.search_bin import run_search_bin
 from .tools.sifting import run_sifting
 from .tools.single_pulse_search import run_single_pulse_search
+from .tools.sum_profiles import run_sum_profiles
+from .tools.summarize_run import inspect_artifacts as _inspect_artifacts
+from .tools.summarize_run import summarize_run as _summarize_run
+from .tools.validate_environment import run_validate_environment
 from .tools.waterfaller import run_waterfaller
+from .tools.weights_to_ignorechan import run_weights_to_ignorechan
 from .tools.zapbirds import run_zapbirds
 
 log = logging.getLogger("presto_mcp.server")
@@ -900,6 +945,704 @@ def _resource_artifact(run_id: str, filename: str) -> str:
         _settings_for_tools(), run_id, filename
     )
     return content
+
+
+# --- Additional PRESTO tools (data prep / RFI / fold QC / advanced) -----------
+
+
+@mcp.tool(
+    name="presto.psrfits2fil",
+    description=(
+        "Run PRESTO 'psrfits2fil.py' inside Docker to convert PSRFITS search-"
+        "format to a SIGPROC .fil (+ optional .inf). Input is relative to "
+        "DATA_DIR; outputs land in runs/<run_id>/artifacts/."
+    ),
+)
+async def presto_psrfits2fil(
+    input_file: Annotated[
+        str,
+        Field(description="PSRFITS file relative to DATA_DIR."),
+    ],
+    output_prefix: Annotated[
+        str | None,
+        Field(default=None, description="Output filename prefix. Defaults to 'fil'."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[Psrfits2FilResult]:
+    return await asyncio.to_thread(
+        run_psrfits2fil,
+        input_file,
+        backend=_backend_for_tools(),
+        output_prefix=output_prefix,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.downsample_filterbank",
+    description=(
+        "Run PRESTO 'downsample_filterbank.py' inside Docker to produce a "
+        "factor-downsampled .fil for faster debugging / lighter analysis. "
+        "factor ∈ [2, 1024]. Input is relative to DATA_DIR."
+    ),
+)
+async def presto_downsample_filterbank(
+    input_file: Annotated[
+        str,
+        Field(description="Filterbank file relative to DATA_DIR."),
+    ],
+    factor: Annotated[
+        int,
+        Field(ge=2, le=1024, description="Downsample factor (2..1024)."),
+    ],
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[DownsampleFilterbankResult]:
+    return await asyncio.to_thread(
+        run_downsample_filterbank,
+        input_file,
+        backend=_backend_for_tools(),
+        factor=factor,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.fb_truncate",
+    description=(
+        "Run PRESTO 'fb_truncate.py' inside Docker to cut a sample window from "
+        "a filterbank. Samples-mode only: provide start_sample (default 0) and "
+        "num_samples. Use presto.readfile first to convert seconds → samples."
+    ),
+)
+async def presto_fb_truncate(
+    input_file: Annotated[
+        str,
+        Field(description="Filterbank file relative to DATA_DIR."),
+    ],
+    num_samples: Annotated[
+        int,
+        Field(ge=1, le=10**10, description="Number of samples to keep."),
+    ],
+    start_sample: Annotated[
+        int,
+        Field(default=0, ge=0, le=10**12, description="Starting sample index."),
+    ] = 0,
+    output_prefix: Annotated[
+        str | None,
+        Field(default=None, description="Output filename prefix. Defaults to 'trunc'."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[FbTruncateResult]:
+    return await asyncio.to_thread(
+        run_fb_truncate,
+        input_file,
+        backend=_backend_for_tools(),
+        start_sample=start_sample,
+        num_samples=num_samples,
+        output_prefix=output_prefix,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.rfifind_stats",
+    description=(
+        "Run PRESTO 'rfifind_stats.py' inside Docker to summarize a prior "
+        "rfifind run's .stats (+ optional .mask) into structured "
+        "bad_channels / bad_intervals. Inputs are '<run_id>/artifacts/...' "
+        "relative to RUNS_DIR."
+    ),
+)
+async def presto_rfifind_stats(
+    stats_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.stats relative to RUNS_DIR."),
+    ],
+    mask_file: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Optional <run_id>/artifacts/<file>.mask relative to RUNS_DIR.",
+        ),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[RfifindStatsResult]:
+    return await asyncio.to_thread(
+        run_rfifind_stats,
+        stats_file,
+        backend=_backend_for_tools(),
+        mask_file=mask_file,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.pfd2png",
+    description=(
+        "[experimental] Run PRESTO 'pfd2png.sh' inside Docker to render a "
+        ".pfd to .png/.ps. Availability depends on the configured PRESTO "
+        "image — verify with presto.validate_environment first. Input is "
+        "'<run_id>/artifacts/<file>.pfd' relative to RUNS_DIR."
+    ),
+)
+async def presto_pfd2png(
+    pfd_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.pfd relative to RUNS_DIR."),
+    ],
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[Pfd2PngResult]:
+    return await asyncio.to_thread(
+        run_pfd2png,
+        pfd_file,
+        backend=_backend_for_tools(),
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.pfdzap",
+    description=(
+        "[experimental] Run PRESTO 'pfdzap.py' inside Docker to apply simple "
+        "interval/channel zapping to a .pfd. zap_commands is a list of strict "
+        "'<low>:<high>' tokens (max 512); arbitrary shell input is rejected. "
+        "pfd_file is '<run_id>/artifacts/<file>.pfd' relative to RUNS_DIR."
+    ),
+)
+async def presto_pfdzap(
+    pfd_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.pfd relative to RUNS_DIR."),
+    ],
+    zap_commands: Annotated[
+        list[str],
+        Field(
+            description="List of '<low>:<high>' tokens (e.g. ['10:20','60:70']).",
+            min_length=1,
+            max_length=512,
+        ),
+    ],
+    output_prefix: Annotated[
+        str | None,
+        Field(default=None, description="Output filename prefix. Defaults to 'pfdzap'."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[PfdZapResult]:
+    return await asyncio.to_thread(
+        run_pfdzap,
+        pfd_file,
+        backend=_backend_for_tools(),
+        zap_commands=zap_commands,
+        output_prefix=output_prefix,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.makezaplist",
+    description=(
+        "[experimental] Run PRESTO 'makezaplist.py' inside Docker to build a "
+        ".zaplist from a .birds (or similar) file under DATA_DIR. Verify the "
+        "script is available in the configured image with "
+        "presto.validate_environment first."
+    ),
+)
+async def presto_makezaplist(
+    input_file: Annotated[
+        str,
+        Field(description="Input file (typically .birds) relative to DATA_DIR."),
+    ],
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[MakeZaplistResult]:
+    return await asyncio.to_thread(
+        run_makezaplist,
+        input_file,
+        backend=_backend_for_tools(),
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.weights_to_ignorechan",
+    description=(
+        "[experimental] Run PRESTO 'weights_to_ignorechan.py' inside Docker "
+        "to convert a .weights or .mask artifact from a prior run into a "
+        "channel-skip list. weights_file is '<run_id>/artifacts/<file>' "
+        "relative to RUNS_DIR. Optional threshold ∈ [0, 1]."
+    ),
+)
+async def presto_weights_to_ignorechan(
+    weights_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.weights (or .mask) relative to RUNS_DIR."),
+    ],
+    threshold: Annotated[
+        float | None,
+        Field(default=None, ge=0.0, le=1.0, description="Optional weight threshold."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[WeightsToIgnorechanResult]:
+    return await asyncio.to_thread(
+        run_weights_to_ignorechan,
+        weights_file,
+        backend=_backend_for_tools(),
+        threshold=threshold,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.fourier_fold",
+    description=(
+        "[experimental] Run PRESTO 'fourier_fold.py' inside Docker to fold a "
+        ".fft at a known (period_seconds OR frequency_hz, optional dm). "
+        "Exactly one of period_seconds / frequency_hz must be supplied. "
+        "fft_file is '<run_id>/artifacts/<file>.fft' relative to RUNS_DIR."
+    ),
+)
+async def presto_fourier_fold(
+    fft_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.fft relative to RUNS_DIR."),
+    ],
+    period_seconds: Annotated[
+        float | None,
+        Field(default=None, gt=0.0, le=60.0, description="Candidate spin period (s)."),
+    ] = None,
+    frequency_hz: Annotated[
+        float | None,
+        Field(default=None, gt=0.0, description="Candidate spin frequency (Hz)."),
+    ] = None,
+    dm: Annotated[
+        float | None,
+        Field(default=None, ge=0.0, le=10_000.0, description="Dispersion measure (pc cm^-3)."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[FourierFoldResult]:
+    return await asyncio.to_thread(
+        run_fourier_fold,
+        fft_file,
+        backend=_backend_for_tools(),
+        period_seconds=period_seconds,
+        frequency_hz=frequency_hz,
+        dm=dm,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.sum_profiles",
+    description=(
+        "[experimental] Run PRESTO 'sum_profiles.py' inside Docker to combine "
+        "many profile files (.bestprof / .prof) from prior runs. Each entry "
+        "of profile_files is '<run_id>/artifacts/<file>' relative to RUNS_DIR."
+    ),
+)
+async def presto_sum_profiles(
+    profile_files: Annotated[
+        list[str],
+        Field(
+            description="List of '<run_id>/artifacts/<file>' relative to RUNS_DIR.",
+            min_length=1,
+            max_length=4096,
+        ),
+    ],
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[SumProfilesResult]:
+    return await asyncio.to_thread(
+        run_sum_profiles,
+        profile_files,
+        backend=_backend_for_tools(),
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+@mcp.tool(
+    name="presto.search_bin",
+    description=(
+        "[advanced] Run PRESTO 'search_bin' inside Docker for phase-modulation "
+        "/ sideband search on a .fft (binary-pulsar candidates). Optional "
+        "[low_hz, high_hz] band ∈ [0, 5e5] Hz with low < high. fft_file is "
+        "'<run_id>/artifacts/<file>.fft' relative to RUNS_DIR."
+    ),
+)
+async def presto_search_bin(
+    fft_file: Annotated[
+        str,
+        Field(description="<run_id>/artifacts/<file>.fft relative to RUNS_DIR."),
+    ],
+    low_hz: Annotated[
+        float | None,
+        Field(default=None, ge=0.0, description="Optional lower frequency bound (Hz)."),
+    ] = None,
+    high_hz: Annotated[
+        float | None,
+        Field(default=None, gt=0.0, description="Optional upper frequency bound (Hz)."),
+    ] = None,
+    background: Annotated[
+        bool,
+        Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+    ] = False,
+) -> ToolRunResult[SearchBinResult]:
+    return await asyncio.to_thread(
+        run_search_bin,
+        fft_file,
+        backend=_backend_for_tools(),
+        low_hz=low_hz,
+        high_hz=high_hz,
+        settings=_settings_for_tools(),
+        background=background,
+    )
+
+
+# --- Utility tools (no PRESTO execution) --------------------------------------
+
+
+@mcp.tool(
+    name="presto.list_data_files",
+    description=(
+        "List files available under PRESTO_DATA_DIR (no Docker, no PRESTO). "
+        "Returns relative paths, size, mtime, extension and a coarse "
+        "likely_type ({filterbank, fits, psrfits, text, unknown}). Optional "
+        "extension filter (e.g. ['.fil', '.fits']). Hidden files are excluded "
+        "unless include_hidden=true."
+    ),
+)
+async def presto_list_data_files(
+    limit: Annotated[
+        int,
+        Field(default=100, ge=1, le=10_000, description="Max rows to return."),
+    ] = 100,
+    extensions: Annotated[
+        list[str] | None,
+        Field(default=None, description="Optional extension allowlist, e.g. ['.fil','.fits']."),
+    ] = None,
+    include_hidden: Annotated[
+        bool,
+        Field(default=False, description="Include dot-prefixed entries."),
+    ] = False,
+) -> ListDataFilesResult:
+    return await asyncio.to_thread(
+        run_list_data_files,
+        limit=limit,
+        extensions=extensions,
+        include_hidden=include_hidden,
+        settings=_settings_for_tools(),
+    )
+
+
+@mcp.tool(
+    name="presto.validate_environment",
+    description=(
+        "Structured local-environment diagnostic. Checks settings, data/runs/"
+        "outputs/logs directories, docker CLI presence and (optionally) the "
+        "PRESTO image, plus policy sanity (cpus, memory_mb, timeout_s). Never "
+        "executes PRESTO. Each check returns OK/WARN/ERROR with remediation."
+    ),
+)
+async def presto_validate_environment(
+    check_image: Annotated[
+        bool,
+        Field(
+            default=True,
+            description="If true, also run 'docker image inspect <PRESTO_IMAGE>'.",
+        ),
+    ] = True,
+) -> ValidateEnvironmentResult:
+    return await asyncio.to_thread(
+        run_validate_environment,
+        check_image=check_image,
+        settings=_settings_for_tools(),
+    )
+
+
+@mcp.tool(
+    name="presto.summarize_run",
+    description=(
+        "Structured summary of one existing run: status, duration, exit_code, "
+        "inputs, artifact counts grouped by type (rfi / time_series / fft / "
+        "accel_candidates / single_pulse / spd / plots / fold / timing / other) "
+        "and suggested next PRESTO tools to call. Reads the manifest + walks "
+        "artifacts/; never reads artifact contents."
+    ),
+)
+async def presto_summarize_run(
+    run_id: Annotated[str, Field(description="A run_id from presto.list_runs.")],
+) -> RunStructuredSummary:
+    return await asyncio.to_thread(
+        _summarize_run, run_id, settings=_settings_for_tools()
+    )
+
+
+@mcp.tool(
+    name="presto.inspect_artifacts",
+    description=(
+        "Per-artifact index for one run: name, size, mtime, classified type, "
+        "resource URI and an is_inline_readable hint (small text artifacts). "
+        "Does not read artifact contents."
+    ),
+)
+async def presto_inspect_artifacts(
+    run_id: Annotated[str, Field(description="A run_id from presto.list_runs.")],
+) -> InspectArtifactsResult:
+    return await asyncio.to_thread(
+        _inspect_artifacts, run_id, settings=_settings_for_tools()
+    )
+
+
+# --- Navigation resources ------------------------------------------------------
+
+
+@mcp.resource(
+    "presto://data",
+    description="JSON index of files under PRESTO_DATA_DIR (relative paths only).",
+    mime_type="application/json",
+)
+def _resource_data_index() -> str:
+    result = run_list_data_files(settings=_settings_for_tools())
+    return result.model_dump_json(indent=2)
+
+
+@mcp.resource(
+    "presto://runs",
+    description="JSON index of recent runs (newest first).",
+    mime_type="application/json",
+)
+def _resource_runs_index() -> str:
+    summaries = list_runs_tool.list_runs(settings=_settings_for_tools())
+    payload = [s.model_dump(mode="json") for s in summaries]
+    return json.dumps({"count": len(payload), "runs": payload}, indent=2)
+
+
+@mcp.resource(
+    "presto://runs/{run_id}/summary",
+    description="Structured RunStructuredSummary JSON for one run.",
+    mime_type="application/json",
+)
+def _resource_run_summary(run_id: str) -> str:
+    return _summarize_run(run_id, settings=_settings_for_tools()).model_dump_json(indent=2)
+
+
+@mcp.resource(
+    "presto://runs/{run_id}/artifacts",
+    description="JSON index of artifacts for one run (no inlined contents).",
+    mime_type="application/json",
+)
+def _resource_run_artifacts(run_id: str) -> str:
+    return _inspect_artifacts(run_id, settings=_settings_for_tools()).model_dump_json(indent=2)
+
+
+# --- Prompts (guidance, not execution) -----------------------------------------
+
+
+@mcp.prompt(
+    name="presto.inspect_observation_plan",
+    description=(
+        "Guide the model through inspecting one observation file with "
+        "presto.readfile and reporting key metadata. No heavy search is run."
+    ),
+)
+def _prompt_inspect_observation_plan(input_file: str, goal: str | None = None) -> str:
+    return build_inspect_observation_plan(input_file, goal=goal)
+
+
+@mcp.prompt(
+    name="presto.single_pulse_search_plan",
+    description=(
+        "Conceptual single-pulse search pipeline (readfile → rfifind → ddplan "
+        "→ prepsubband/prepdata → single_pulse_search → rrattrap → make_spd → "
+        "plot_spd → waterfaller). Guidance only; tools must be called by client."
+    ),
+)
+def _prompt_single_pulse_search_plan(
+    input_file: str,
+    dm_low: float | None = None,
+    dm_high: float | None = None,
+    threshold: float | None = None,
+) -> str:
+    return build_single_pulse_search_plan(
+        input_file, dm_low=dm_low, dm_high=dm_high, threshold=threshold
+    )
+
+
+@mcp.prompt(
+    name="presto.periodic_search_plan",
+    description=(
+        "Conceptual periodic / acceleration search pipeline (readfile → rfifind "
+        "→ ddplan → prepdata/prepsubband → realfft → zapbirds → accelsearch → "
+        "sifting → prepfold → get_toas). Guidance only."
+    ),
+)
+def _prompt_periodic_search_plan(
+    input_file: str,
+    dm_low: float | None = None,
+    dm_high: float | None = None,
+    zmax: int | None = None,
+) -> str:
+    return build_periodic_search_plan(
+        input_file, dm_low=dm_low, dm_high=dm_high, zmax=zmax
+    )
+
+
+@mcp.prompt(
+    name="presto.fold_known_candidate_plan",
+    description=(
+        "Guide the model through folding a known (period, DM) candidate with "
+        "presto.prepfold and optionally computing TOAs."
+    ),
+)
+def _prompt_fold_known_candidate_plan(
+    input_file: str, period_seconds: float, dm: float
+) -> str:
+    return build_fold_known_candidate_plan(input_file, period_seconds, dm)
+
+
+@mcp.prompt(
+    name="presto.explain_failed_run",
+    description=(
+        "Guide the model through diagnosing a failed run via manifest + stdout "
+        "+ stderr, classifying the failure mode and suggesting one next action."
+    ),
+)
+def _prompt_explain_failed_run(run_id: str) -> str:
+    return build_explain_failed_run(run_id)
+
+
+@mcp.prompt(
+    name="presto.generate_candidate_report_plan",
+    description=(
+        "Guide the model through summarising candidate evidence across one or "
+        "more runs. Strictly distinguishes artifact / noise / candidate / "
+        "detection; does not assert scientific confirmations."
+    ),
+)
+def _prompt_generate_candidate_report_plan(run_id: str | None = None) -> str:
+    return build_generate_candidate_report_plan(run_id)
+
+
+@mcp.prompt(
+    name="presto.prepare_filterbank_plan",
+    description=(
+        "Guide the model through data preparation (readfile → psrfits2fil / "
+        "fb_truncate / downsample_filterbank as needed). No search is launched."
+    ),
+)
+def _prompt_prepare_filterbank_plan(input_file: str, goal: str | None = None) -> str:
+    return build_prepare_filterbank_plan(input_file, goal=goal)
+
+
+@mcp.prompt(
+    name="presto.rfi_mitigation_plan",
+    description=(
+        "Guide the model through RFI mitigation: rfifind → rfifind_stats → "
+        "weights_to_ignorechan / makezaplist → zapbirds, and how to use mask "
+        "vs zaplist vs ignorechan."
+    ),
+)
+def _prompt_rfi_mitigation_plan(
+    input_file: str, existing_rfifind_run_id: str | None = None
+) -> str:
+    return build_rfi_mitigation_plan(
+        input_file, existing_rfifind_run_id=existing_rfifind_run_id
+    )
+
+
+@mcp.prompt(
+    name="presto.fold_qc_plan",
+    description=(
+        "Guide the model through quality-checking a folded .pfd: inspect "
+        ".bestprof/.ps/.png, optionally pfd2png / pfdzap / get_toas / "
+        "sum_profiles. Refuses scientific claims without artifact evidence."
+    ),
+)
+def _prompt_fold_qc_plan(pfd_file: str, goal: str | None = None) -> str:
+    return build_fold_qc_plan(pfd_file, goal=goal)
+
+
+@mcp.prompt(
+    name="presto.periodic_advanced_search_plan",
+    description=(
+        "Guide the model through the periodic-search pipeline plus advanced "
+        "add-ons (fourier_fold for known candidates; search_bin for binary "
+        "orbital sidebands when binary_search=true)."
+    ),
+)
+def _prompt_periodic_advanced_search_plan(
+    input_file: str, binary_search: bool = False
+) -> str:
+    return build_periodic_advanced_search_plan(input_file, binary_search=binary_search)
+
+
+@mcp.prompt(
+    name="presto.single_pulse_full_plan",
+    description=(
+        "Guide the model through the full single-pulse pipeline (readfile → "
+        "rfifind → rfifind_stats → ddplan → prepsubband → single_pulse_search "
+        "→ rrattrap → make_spd → plot_spd → waterfaller). Suggests fb_truncate "
+        "for debugging large inputs."
+    ),
+)
+def _prompt_single_pulse_full_plan(
+    input_file: str,
+    dm_low: float | None = None,
+    dm_high: float | None = None,
+) -> str:
+    return build_single_pulse_full_plan(
+        input_file, dm_low=dm_low, dm_high=dm_high
+    )
+
+
+@mcp.prompt(
+    name="presto.tool_selection_guide",
+    description=(
+        "Categorized index mapping a free-form task description to the right "
+        "typed tool(s): data prep / RFI / dedispersion / periodic search / "
+        "single-pulse / folding / timing / visualization / debugging / "
+        "advanced. Flags experimental tools explicitly."
+    ),
+)
+def _prompt_tool_selection_guide(task: str) -> str:
+    return build_tool_selection_guide(task)
 
 
 # --- Entrypoint ----------------------------------------------------------------
