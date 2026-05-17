@@ -31,7 +31,9 @@ def run_rfifind(
     t = check_rfifind_time(time)
     prefix = check_output_prefix(output_prefix or DEFAULT_PREFIX)
 
-    def argv_builder(container_input: str, _run_dir: Path) -> list[str]:
+    def argv_builder(
+        container_input: str, _extras: tuple[str, ...], _run_dir: Path
+    ) -> list[str]:
         return ["rfifind", "-time", str(t), "-o", f"/outputs/artifacts/{prefix}", container_input]
 
     def parser(stdout: str, run_dir: Path) -> RfifindSummary:

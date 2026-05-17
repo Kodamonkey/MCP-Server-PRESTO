@@ -14,7 +14,9 @@ from ..parsers import readfile_parser
 log = logging.getLogger("presto_mcp.tools.readfile")
 
 
-def _argv_builder(container_input: str, _run_dir: Path) -> list[str]:
+def _argv_builder(
+    container_input: str, _extras: tuple[str, ...], _run_dir: Path
+) -> list[str]:
     return ["readfile", container_input]
 
 

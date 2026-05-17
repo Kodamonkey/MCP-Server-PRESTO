@@ -39,7 +39,9 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
-def _readfile_argv(container_input: str, _run_dir: Path) -> list[str]:
+def _readfile_argv(
+    container_input: str, _extras: tuple[str, ...], _run_dir: Path
+) -> list[str]:
     return ["readfile", container_input]
 
 

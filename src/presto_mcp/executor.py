@@ -12,10 +12,10 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel
 
@@ -32,44 +32,78 @@ from .models import (
     RunStatus,
     ToolRunResult,
 )
-from .path_security import create_run_dir, resolve_input_path
+from .path_security import create_run_dir, resolve_input_path, resolve_run_artifact
 
 log = logging.getLogger("presto_mcp.executor")
 
 T = TypeVar("T", bound=BaseModel)
+
+InputRoot = Literal["data", "runs"]
+
+
+@dataclass(frozen=True)
+class ExtraInput:
+    """One extra input file resolved alongside the primary input."""
+
+    path: str            # host-relative
+    root: InputRoot = "data"
 
 
 @dataclass(frozen=True)
 class RunSpec(Generic[T]):
     """Everything the executor needs to drive one PRESTO invocation.
 
-    ``presto_argv_builder`` is given the *resolved container input path* and
-    must return the argv that follows the image name (e.g.
-    ``["readfile", "/data/sample.fil"]``).
+    ``presto_argv_builder`` is given ``(container_input, extra_container_paths,
+    run_dir)`` and must return the argv that follows the image name (e.g.
+    ``["readfile", "/data/sample.fil"]``). ``container_input`` is ``""`` when
+    ``input_file is None`` (DDplan-style pure compute).
 
     ``parser`` consumes stdout and run-dir, returns a typed result.
+
+    Optional fields enable richer tools:
+
+    * ``input_root="runs"`` interprets ``input_file`` as ``<run_id>/artifacts/<file>``
+      under ``runs_dir``; the executor mounts ``runs_dir`` read-only at ``/runs``.
+    * ``extra_inputs`` resolves additional files (each with its own root) and
+      passes their container paths to the builder as the second positional arg.
+    * ``pre_invocation_hook(run_dir, host_extras)`` runs after the run dir is
+      created and inputs are resolved, but before Docker is invoked. Used by
+      ``sifting`` to stage many files into ``run_dir/staging/``.
     """
 
     tool_name: str
-    input_file: str
+    input_file: str | None
     inputs_extra: dict[str, str]
-    container_input_path: str  # logical (e.g. /data/sample.fil)
-    presto_argv_builder: Callable[[str, Path], list[str]]
+    container_input_path: str  # kept for back-compat; executor fills the real one
+    presto_argv_builder: Callable[[str, tuple[str, ...], Path], list[str]]
     parser: Callable[[str, Path], T]
     timeout_s: int
     cpus: float
     memory_mb: int
+    input_root: InputRoot = "data"
+    extra_inputs: tuple[ExtraInput, ...] = field(default_factory=tuple)
+    pre_invocation_hook: Callable[[Path, tuple[Path, ...]], None] | None = None
 
 
 def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-def _to_container_path(host_file: Path, host_data_dir: Path) -> str:
-    """Map a host file under ``data_dir`` to its container path under ``/data``."""
-    rel = host_file.resolve().relative_to(host_data_dir.resolve())
-    # PRESTO containers are Linux: always forward-slash, posix-style.
-    return f"/data/{rel.as_posix()}"
+def _to_container_path(host_file: Path, root: Path, mount: str) -> str:
+    """Map a host file under ``root`` to its container path under ``mount``."""
+    rel = host_file.resolve().relative_to(root.resolve())
+    return f"{mount}/{rel.as_posix()}"
+
+
+def _resolve_one(path: str, root: InputRoot, settings: Settings) -> tuple[Path, str]:
+    """Return (host_path, container_path) for one input."""
+    if root == "data":
+        host = resolve_input_path(path, settings.data_dir)
+        return host, _to_container_path(host, settings.data_dir, "/data")
+    if root == "runs":
+        host = resolve_run_artifact(path, settings.runs_dir)
+        return host, _to_container_path(host, settings.runs_dir, "/runs")
+    raise PathSecurityError(f"unknown input_root: {root!r}")
 
 
 def _persist_logs(run_dir: Path, result: BackendResult) -> tuple[str, str]:
@@ -106,8 +140,10 @@ class _PreparedRun(Generic[T]):
     run_id: str
     run_dir: Path
     container_name: str
-    host_input: Path
+    host_input: Path | None
     container_input: str
+    extra_host_paths: tuple[Path, ...]
+    extra_container_paths: tuple[str, ...]
     inputs_log: dict[str, str]
     container_inputs: dict[str, str]
     presto_argv: list[str]
@@ -120,15 +156,43 @@ def _prepare_run(
     backend: BackendProtocol,
 ) -> _PreparedRun[T]:
     """Validate paths, allocate run dir, build Docker argv. No container I/O yet."""
-    host_input = resolve_input_path(spec.input_file, settings.data_dir)
-    container_input = _to_container_path(host_input, settings.data_dir)
+    host_input: Path | None = None
+    container_input = ""
+    if spec.input_file is not None:
+        host_input, container_input = _resolve_one(spec.input_file, spec.input_root, settings)
+
+    extra_host: list[Path] = []
+    extra_container: list[str] = []
+    for ex in spec.extra_inputs:
+        host_e, cont_e = _resolve_one(ex.path, ex.root, settings)
+        extra_host.append(host_e)
+        extra_container.append(cont_e)
+
     run_id, run_dir = create_run_dir(spec.tool_name, settings.runs_dir)
     container_name = f"presto-{run_id}"
 
-    inputs_log: dict[str, str] = {"input_file": str(host_input)}
+    inputs_log: dict[str, str] = {}
+    container_inputs: dict[str, str] = {}
+    if host_input is not None:
+        inputs_log["input_file"] = str(host_input)
+        container_inputs["input_file"] = container_input
+    for i, (h, c) in enumerate(zip(extra_host, extra_container, strict=True)):
+        inputs_log[f"extra_input_{i}"] = str(h)
+        container_inputs[f"extra_input_{i}"] = c
     inputs_log.update(spec.inputs_extra)
-    container_inputs: dict[str, str] = {"input_file": container_input}
-    presto_argv = spec.presto_argv_builder(container_input, run_dir)
+
+    # Run any tool-specific staging hook before building argv (some hooks influence
+    # what filenames the builder will reference).
+    if spec.pre_invocation_hook is not None:
+        spec.pre_invocation_hook(run_dir, tuple(extra_host))
+
+    presto_argv = spec.presto_argv_builder(
+        container_input, tuple(extra_container), run_dir
+    )
+
+    needs_runs_mount = spec.input_root == "runs" or any(
+        ex.root == "runs" for ex in spec.extra_inputs
+    )
 
     invocation = build_invocation(
         image=settings.image,
@@ -138,6 +202,7 @@ def _prepare_run(
         cpus=spec.cpus,
         memory_mb=spec.memory_mb,
         container_name=container_name,
+        runs_dir_ro=settings.runs_dir if needs_runs_mount else None,
     )
     return _PreparedRun(
         spec=spec,
@@ -149,6 +214,8 @@ def _prepare_run(
         container_name=container_name,
         host_input=host_input,
         container_input=container_input,
+        extra_host_paths=tuple(extra_host),
+        extra_container_paths=tuple(extra_container),
         inputs_log=inputs_log,
         container_inputs=container_inputs,
         presto_argv=presto_argv,
@@ -310,11 +377,12 @@ def _safe_digest(backend: BackendProtocol, image: str) -> str | None:
 
 # Convenience re-exports kept here so tool modules don't import models directly
 __all__ = [
+    "ExtraInput",
+    "PathSecurityError",
     "ReadfileMetadata",
     "RfifindSummary",
     "RunSpec",
     "RunStatus",
     "ToolRunResult",
     "execute",
-    "PathSecurityError",
 ]

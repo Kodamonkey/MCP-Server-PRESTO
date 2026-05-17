@@ -122,6 +122,110 @@ class PrepfoldResult(BaseModel):
     png_file: str | None = None
 
 
+class PrepdataResult(BaseModel):
+    dm: float
+    output_prefix: str
+    dat_file: str | None = None
+    inf_file: str | None = None
+    num_samples: int | None = None
+    sample_time_s: float | None = None
+
+
+class DDplanPass(BaseModel):
+    low_dm: float
+    dm_step: float
+    dms_per_call: int
+    num_calls: int
+    downsamp: int
+
+
+class DDplanResult(BaseModel):
+    dm_low: float
+    dm_high: float
+    num_dms: int
+    freq_mhz: float
+    bw_mhz: float
+    num_channels: int
+    sample_time_us: float
+    passes: list[DDplanPass] = Field(default_factory=list)
+
+
+class PrepsubbandResult(BaseModel):
+    dm_low: float
+    dm_step: float
+    num_dms: int
+    num_subbands: int
+    output_prefix: str
+    dat_files: list[str] = Field(default_factory=list)
+    inf_files: list[str] = Field(default_factory=list)
+
+
+class RealfftResult(BaseModel):
+    input_dat: str
+    fft_file: str | None = None
+    inf_file: str | None = None
+
+
+class AccelCandidate(BaseModel):
+    cand_num: int | None = None
+    sigma: float | None = None
+    frequency_hz: float | None = None
+    period_ms: float | None = None
+    z: float | None = None
+    num_harmonics: int | None = None
+    dm: float | None = None
+
+
+class AccelsearchResult(BaseModel):
+    zmax: int
+    numharm: int
+    input_fft: str
+    accel_cand_file: str | None = None
+    accel_txtcand_file: str | None = None
+    cand_count: int | None = None
+    top_candidates: list[AccelCandidate] = Field(default_factory=list)
+
+
+class SinglePulseSearchResult(BaseModel):
+    threshold: float
+    max_width_s: float
+    input_dat_files: list[str] = Field(default_factory=list)
+    singlepulse_files: list[str] = Field(default_factory=list)
+    ps_file: str | None = None
+    pulse_count: int | None = None
+    max_snr: float | None = None
+
+
+class SiftCandidate(BaseModel):
+    cand_id: str | None = None
+    dm: float | None = None
+    sigma: float | None = None
+    period_ms: float | None = None
+    frequency_hz: float | None = None
+    num_hits: int | None = None
+    note: str | None = None
+
+
+class SiftingResult(BaseModel):
+    input_accel_files: list[str] = Field(default_factory=list)
+    min_num_dms: int
+    low_dm_cutoff: float
+    sigma_threshold: float
+    surviving_candidates: list[SiftCandidate] = Field(default_factory=list)
+    total_input_cands: int | None = None
+    total_surviving: int | None = None
+    summary_file: str | None = None
+
+
+class GetTOAsResult(BaseModel):
+    pfd_file: str
+    template_file: str
+    num_subints: int
+    num_subbands: int
+    num_toas: int
+    toa_lines: list[str] = Field(default_factory=list)
+
+
 class RunSummary(BaseModel):
     """One row of ``list_runs`` output (a thin slice of RunManifest)."""
 

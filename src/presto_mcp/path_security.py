@@ -102,6 +102,59 @@ def resolve_input_path(relative_path: str, data_root: Path) -> Path:
     return candidate
 
 
+_RUN_ARTIFACT_RE = re.compile(
+    r"^(\d{8}T\d{6}Z-[A-Z2-7]{6})/artifacts/[^/\\]+$"
+)
+
+
+def resolve_run_artifact(rel_path: str, runs_root: Path) -> Path:
+    """Resolve ``<run_id>/artifacts/<filename>`` against ``runs_root``.
+
+    Used by pipeline-chained tools (``realfft``, ``accelsearch``, ``sifting``,
+    ``get_TOAs``, ``single_pulse_search``) that consume artifacts produced by
+    earlier runs. Same security model as :func:`resolve_input_path`: rejects
+    absolute paths, ``..`` segments, anything outside ``runs_root``.
+    """
+    if not isinstance(rel_path, str):
+        raise PathSecurityError(
+            f"input path must be a string, got {type(rel_path).__name__}"
+        )
+
+    s = rel_path.strip()
+    if not s:
+        raise PathSecurityError("input path is empty")
+
+    if _is_absolute_anywhere(s):
+        raise PathSecurityError(f"absolute paths are not allowed: {rel_path!r}")
+
+    normalized = s.replace("\\", "/")
+    if _has_traversal_segment(normalized):
+        raise PathSecurityError(
+            f"path contains forbidden segment ('..', '.', empty): {rel_path!r}"
+        )
+
+    if not _RUN_ARTIFACT_RE.match(normalized):
+        raise PathSecurityError(
+            f"expected '<run_id>/artifacts/<filename>', got {rel_path!r}"
+        )
+
+    root_resolved = runs_root.resolve()
+    candidate = (root_resolved / PurePosixPath(normalized)).resolve(strict=False)
+
+    if not candidate.exists():
+        raise PathSecurityError(f"run artifact does not exist: {rel_path!r}")
+
+    candidate = candidate.resolve(strict=True)
+    ensure_inside_root(candidate, root_resolved)
+
+    if not candidate.is_file():
+        raise PathSecurityError(
+            f"run artifact is not a regular file: {rel_path!r}"
+        )
+
+    return candidate
+
+
 def ensure_inside_root(path: Path, root: Path) -> None:
     """Raise :class:`PathSecurityError` if ``path`` is not under ``root``.
 
