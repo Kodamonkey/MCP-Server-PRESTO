@@ -71,6 +71,7 @@ def run_ddplan(
             "-b", str(bw),
             "-n", str(nch),
             "-t", f"{dt_s:.9g}",
+            "-o", "/outputs/ddplan.eps",
         ]
         if nsub is not None:
             argv += ["-s", str(nsub)]
