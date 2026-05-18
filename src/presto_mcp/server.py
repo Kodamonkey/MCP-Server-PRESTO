@@ -26,7 +26,6 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from . import tools as _tools_pkg
 from .config import Settings, ensure_runtime_dirs, get_settings, run_health_check
 from .docker_backend import BackendProtocol, DockerBackend
 from .errors import (
