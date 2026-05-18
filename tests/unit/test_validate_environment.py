@@ -35,12 +35,19 @@ def _fake_docker_absent(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _mock_run_factory(
-    version_rc: int = 0, image_rc: int = 0, version_stdout: bytes = b"Docker 27\n"
+    version_rc: int = 0,
+    daemon_rc: int = 0,
+    image_rc: int = 0,
+    version_stdout: bytes = b"Docker 27\n",
 ):
     def _mock_run(argv, **kwargs):  # type: ignore[no-untyped-def]
         if argv[:2] == ["/usr/bin/docker", "--version"] or argv[1:2] == ["--version"]:
             return subprocess.CompletedProcess(
                 argv, version_rc, stdout=version_stdout, stderr=b""
+            )
+        if argv[:2] == ["/usr/bin/docker", "info"] or argv[1:2] == ["info"]:
+            return subprocess.CompletedProcess(
+                argv, daemon_rc, stdout=b"server ok\n", stderr=b"daemon unavailable\n"
             )
         if "image" in argv and "inspect" in argv:
             return subprocess.CompletedProcess(argv, image_rc, stdout=b"[{}]", stderr=b"")
@@ -61,7 +68,14 @@ def test_ok_when_docker_and_image_present(
     res = ve.run_validate_environment(settings=_settings(tmp_path, data_dir=data))
     assert res.status == "OK"
     names = {c.name for c in res.checks}
-    assert {"settings.load", "data_dir.exists", "docker.version", "docker.image"} <= names
+    assert {
+        "settings.load",
+        "data_dir.exists",
+        "docker.cli",
+        "docker.version",
+        "docker.daemon",
+        "docker.image",
+    } <= names
 
 
 def test_warn_when_data_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,6 +114,21 @@ def test_warn_when_image_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     res = ve.run_validate_environment(settings=_settings(tmp_path, data_dir=data))
     assert res.status == "WARN"
     assert any(c.name == "docker.image" and c.status == "WARN" for c in res.checks)
+
+
+def test_error_when_docker_daemon_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "obs.fil").write_bytes(b"x" * 16)
+    _fake_docker_present(monkeypatch)
+    monkeypatch.setattr(ve.subprocess, "run", _mock_run_factory(daemon_rc=1))
+
+    res = ve.run_validate_environment(settings=_settings(tmp_path, data_dir=data))
+    assert res.status == "ERROR"
+    assert any(c.name == "docker.daemon" and c.status == "ERROR" for c in res.checks)
+    assert not any(c.name == "docker.image" for c in res.checks)
 
 
 def test_zero_byte_placeholder_detected(

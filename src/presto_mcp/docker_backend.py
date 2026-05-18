@@ -25,6 +25,7 @@ log = logging.getLogger("presto_mcp.docker_backend")
 CONTAINER_DATA_MOUNT = "/data"
 CONTAINER_OUTPUT_MOUNT = "/outputs"
 CONTAINER_RUNS_MOUNT = "/runs"
+DIAGNOSTIC_EXCERPT_CHARS = 1200
 
 
 def build_invocation(
@@ -156,12 +157,17 @@ class DockerBackend:
 
         duration = time.monotonic() - started
         status = RunStatus.SUCCESS if cp.returncode == 0 else RunStatus.FAILED
+        stdout = cp.stdout or ""
+        stderr = cp.stderr or ""
         return BackendResult(
             status=status,
             exit_code=cp.returncode,
-            stdout=cp.stdout or "",
-            stderr=cp.stderr or "",
+            stdout=stdout,
+            stderr=stderr,
             duration_s=duration,
+            error=_failure_error(cp.returncode, stdout, stderr)
+            if status == RunStatus.FAILED
+            else None,
         )
 
     def _kill_container(self, name: str) -> None:
@@ -193,3 +199,18 @@ class DockerBackend:
             return None
         digest = (cp.stdout or "").strip()
         return digest or None
+
+
+def _clip(text: str, limit: int = DIAGNOSTIC_EXCERPT_CHARS) -> str:
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _failure_error(exit_code: int, stdout: str, stderr: str) -> str:
+    details = _clip(stderr or stdout)
+    label = "docker invocation failed" if exit_code == 125 else "PRESTO command failed"
+    if details:
+        return f"{label} with exit code {exit_code}: {details}"
+    return f"{label} with exit code {exit_code}"

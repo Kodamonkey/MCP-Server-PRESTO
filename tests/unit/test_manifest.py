@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -13,6 +13,7 @@ from presto_mcp.manifest import (
     list_run_ids,
     list_run_summaries,
     load_manifest,
+    manifest_path,
     write_manifest,
 )
 from presto_mcp.models import RunManifest, RunStatus
@@ -118,3 +119,53 @@ def test_get_manifest_ok(tmp_path: Path) -> None:
     m = _sample_manifest(run_id=rid)
     write_manifest(d, m)
     assert get_manifest(runs, rid) == m
+
+
+def test_write_manifest_preserves_old_file_when_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "20260516T143052Z-K7QM3A"
+    run_dir.mkdir()
+    original = _sample_manifest()
+    write_manifest(run_dir, original)
+    before = manifest_path(run_dir).read_text(encoding="utf-8")
+
+    def fail_replace(self: Path, target: Path) -> Path:  # noqa: ARG001
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    updated = original.model_copy(update={"tool": "rfifind"})
+    with pytest.raises(ManifestError, match="failed to write manifest"):
+        write_manifest(run_dir, updated)
+
+    assert manifest_path(run_dir).read_text(encoding="utf-8") == before
+    assert load_manifest(run_dir).tool == "readfile"
+
+
+def test_get_manifest_marks_stale_running_as_failed(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    rid = "20260516T143052Z-K7QM3A"
+    d = runs / rid
+    d.mkdir()
+    running = _sample_manifest(run_id=rid).model_copy(
+        update={
+            "status": RunStatus.RUNNING,
+            "exit_code": None,
+            "started_at": datetime.now(UTC) - timedelta(seconds=120),
+            "finished_at": None,
+            "duration_s": None,
+            "timeout_s": 1,
+            "error": None,
+        }
+    )
+    write_manifest(d, running)
+
+    raw = load_manifest(d)
+    viewed = get_manifest(runs, rid)
+    summaries = list_run_summaries(runs)
+
+    assert raw.status == RunStatus.RUNNING
+    assert viewed.status == RunStatus.FAILED
+    assert viewed.error is not None and "stale" in viewed.error
+    assert summaries[0].status == RunStatus.FAILED

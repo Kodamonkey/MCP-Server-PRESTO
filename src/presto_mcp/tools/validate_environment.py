@@ -133,15 +133,20 @@ def _check_writable_dir(name: str, path: Path) -> EnvironmentCheck:
     )
 
 
-def _check_docker_cli() -> tuple[str | None, EnvironmentCheck]:
+def _check_docker_cli() -> tuple[str | None, list[EnvironmentCheck]]:
     docker = shutil.which("docker")
     if not docker:
-        return None, EnvironmentCheck(
-            name="docker.cli",
-            status="ERROR",
-            message="docker CLI not found on PATH",
-            remediation="Install Docker Desktop and ensure 'docker' is on PATH.",
-        )
+        return None, [
+            EnvironmentCheck(
+                name="docker.cli",
+                status="ERROR",
+                message="docker CLI not found on PATH",
+                remediation="Install Docker Desktop and ensure 'docker' is on PATH.",
+            )
+        ]
+    checks = [
+        EnvironmentCheck(name="docker.cli", status="OK", message=docker)
+    ]
     try:
         cp = subprocess.run(
             [docker, "--version"],
@@ -151,23 +156,59 @@ def _check_docker_cli() -> tuple[str | None, EnvironmentCheck]:
             shell=False,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        return docker, EnvironmentCheck(
-            name="docker.version",
+        checks.append(
+            EnvironmentCheck(
+                name="docker.version",
+                status="ERROR",
+                message=f"`docker --version` failed: {e}",
+                remediation="Reinstall Docker Desktop or repair PATH.",
+            )
+        )
+        return docker, checks
+    if cp.returncode != 0:
+        checks.append(
+            EnvironmentCheck(
+                name="docker.version",
+                status="ERROR",
+                message=f"`docker --version` exit={cp.returncode}",
+                remediation="Reinstall Docker Desktop or repair PATH.",
+            )
+        )
+        return docker, checks
+    version = (cp.stdout or b"").decode("utf-8", errors="replace").strip()
+    checks.append(
+        EnvironmentCheck(name="docker.version", status="OK", message=version or "ok")
+    )
+    return docker, checks
+
+
+def _check_docker_daemon(docker: str) -> EnvironmentCheck:
+    try:
+        cp = subprocess.run(
+            [docker, "info"],
+            check=False,
+            capture_output=True,
+            timeout=_DOCKER_PROBE_TIMEOUT_S,
+            shell=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return EnvironmentCheck(
+            name="docker.daemon",
             status="ERROR",
-            message=f"`docker --version` failed: {e}",
+            message=f"`docker info` failed: {e}",
             remediation="Start Docker Desktop / the docker daemon.",
         )
     if cp.returncode != 0:
-        return docker, EnvironmentCheck(
-            name="docker.version",
+        stderr = (cp.stderr or b"").decode("utf-8", errors="replace").strip()
+        stdout = (cp.stdout or b"").decode("utf-8", errors="replace").strip()
+        detail = stderr or stdout or f"exit={cp.returncode}"
+        return EnvironmentCheck(
+            name="docker.daemon",
             status="ERROR",
-            message=f"`docker --version` exit={cp.returncode}",
+            message=f"`docker info` failed: {detail}",
             remediation="Start Docker Desktop / the docker daemon.",
         )
-    version = (cp.stdout or b"").decode("utf-8", errors="replace").strip()
-    return docker, EnvironmentCheck(
-        name="docker.version", status="OK", message=version or "ok"
-    )
+    return EnvironmentCheck(name="docker.daemon", status="OK", message="available")
 
 
 def _check_image(docker: str, image: str) -> EnvironmentCheck:
@@ -240,10 +281,16 @@ def run_validate_environment(
     checks.append(_check_writable_dir("outputs", s.outputs_dir))
     checks.append(_check_writable_dir("logs", s.logs_dir))
 
-    docker, docker_check = _check_docker_cli()
-    checks.append(docker_check)
+    docker, docker_checks = _check_docker_cli()
+    checks.extend(docker_checks)
 
-    if docker is not None and check_image:
+    daemon_ok = False
+    if docker is not None and all(c.status == "OK" for c in docker_checks):
+        daemon_check = _check_docker_daemon(docker)
+        checks.append(daemon_check)
+        daemon_ok = daemon_check.status == "OK"
+
+    if docker is not None and daemon_ok and check_image:
         checks.append(_check_image(docker, s.image))
 
     checks.append(_check_policies(s))

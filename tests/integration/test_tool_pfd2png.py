@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from presto_mcp.config import Settings
+from presto_mcp.errors import PathSecurityError
 from presto_mcp.models import RunStatus
 from presto_mcp.tools.pfd2png import run_pfd2png
 from tests.fakes.fake_docker_backend import FakeDockerBackend, FakeResponse
@@ -22,6 +23,7 @@ def settings(tmp_path: Path) -> Settings:
     prior = runs / PRIOR_RUN_ID / "artifacts"
     prior.mkdir(parents=True)
     (prior / "fold.pfd").write_bytes(b"P" * 16)
+    (prior / "fold.txt").write_text("not a pfd", encoding="utf-8")
     return Settings(
         image="alex88ridolfi/presto5:png",
         data_dir=data.resolve(),
@@ -76,3 +78,25 @@ def test_pfd2png_handles_missing_binary(settings: Settings) -> None:
     assert result.result is not None
     assert result.result.png_file is None
     assert any("pfd2png" in n for n in result.result.notes)
+
+
+def test_pfd2png_rejects_non_pfd(settings: Settings) -> None:
+    backend = FakeDockerBackend()
+    with pytest.raises(PathSecurityError, match=".pfd"):
+        run_pfd2png(
+            f"{PRIOR_RUN_ID}/artifacts/fold.txt",
+            backend=backend,
+            settings=settings,
+        )
+    assert backend.calls == []
+
+
+def test_pfd2png_rejects_traversal(settings: Settings) -> None:
+    backend = FakeDockerBackend()
+    with pytest.raises(PathSecurityError):
+        run_pfd2png(
+            f"{PRIOR_RUN_ID}/artifacts/../fold.pfd",
+            backend=backend,
+            settings=settings,
+        )
+    assert backend.calls == []

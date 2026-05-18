@@ -13,8 +13,10 @@ from pathlib import Path
 
 from ..config import Settings, get_settings
 from ..docker_backend import BackendProtocol
+from ..errors import PathSecurityError
 from ..executor import RunSpec, execute
 from ..models import Pfd2PngResult, ToolRunResult
+from ..path_security import resolve_run_artifact
 
 log = logging.getLogger("presto_mcp.tools.pfd2png")
 
@@ -35,14 +37,14 @@ def run_pfd2png(
     """
     s = settings or get_settings()
 
-    pfd_basename = Path(pfd_file).name
+    host_pfd = resolve_run_artifact(pfd_file, s.runs_dir)
+    if host_pfd.suffix != ".pfd":
+        raise PathSecurityError(f"pfd2png expects a .pfd file; got {host_pfd.name}")
+    pfd_basename = host_pfd.name
 
     def _stage_pfd(run_dir: Path, _extras: tuple[Path, ...]) -> None:
-        src = s.runs_dir / pfd_file
-        if not src.is_file():
-            return
         dst = run_dir / "artifacts" / pfd_basename
-        shutil.copy(src, dst)
+        shutil.copy(host_pfd, dst)
 
     def argv_builder(
         _container_input: str, _extras: tuple[str, ...], _run_dir: Path
@@ -77,7 +79,7 @@ def run_pfd2png(
 
     spec = RunSpec[Pfd2PngResult](
         tool_name="pfd2png",
-        input_file=pfd_file,
+        input_file=None,
         inputs_extra={"pfd_file": pfd_file},
         container_input_path="",
         presto_argv_builder=argv_builder,
@@ -85,7 +87,6 @@ def run_pfd2png(
         timeout_s=s.default_timeout_s,
         cpus=s.default_cpus,
         memory_mb=s.default_memory_mb,
-        input_root="runs",
         container_workdir="/outputs/artifacts",
         pre_invocation_hook=_stage_pfd,
     )

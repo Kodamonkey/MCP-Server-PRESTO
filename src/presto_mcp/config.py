@@ -38,6 +38,19 @@ def _env_path(name: str, default_rel: str) -> Path:
     return p
 
 
+def _env_int_min(name: str, default: int, minimum: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from e
+    if value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}, got {value}")
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime configuration. All paths are absolute and resolved."""
@@ -52,6 +65,7 @@ class Settings:
     default_timeout_s: int
     network: str
     skip_healthcheck: bool
+    max_concurrent_runs: int = 1
 
     def with_overrides(self, **kwargs: object) -> Settings:
         """Return a copy with selected fields replaced (test helper)."""
@@ -73,6 +87,7 @@ def _load_from_env() -> Settings:
         default_timeout_s=int(os.environ.get("PRESTO_DEFAULT_TIMEOUT_SECONDS", "1800")),
         network=os.environ.get("PRESTO_NETWORK", "none"),
         skip_healthcheck=_env_bool("PRESTO_SKIP_HEALTHCHECK", False),
+        max_concurrent_runs=_env_int_min("PRESTO_MAX_CONCURRENT_RUNS", 1, 1),
     )
 
 
@@ -98,7 +113,7 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
     Checks:
       * ``data_dir`` exists and contains at least one file.
       * No file under ``data_dir`` is 0 bytes (OneDrive placeholder detection).
-      * ``docker`` is on PATH and responds to ``--version``.
+      * ``docker`` is on PATH and the daemon responds to ``docker info``.
     """
     if s.skip_healthcheck:
         log.warning("PRESTO_SKIP_HEALTHCHECK=true; bypassing startup health check.")
@@ -148,11 +163,18 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
 
     try:
         subprocess.run(
-            [docker, "--version"],
+            [docker, "info"],
             check=True,
             capture_output=True,
             timeout=10,
             shell=False,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
-        raise HealthCheckError(f"`docker --version` failed: {e}") from e
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ) as e:
+        raise HealthCheckError(
+            f"`docker info` failed; Docker daemon may be unavailable: {e}"
+        ) from e

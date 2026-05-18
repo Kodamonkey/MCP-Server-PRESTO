@@ -14,9 +14,10 @@ from pathlib import Path
 
 from ..config import Settings, get_settings
 from ..docker_backend import BackendProtocol
-from ..errors import PolicyViolationError
+from ..errors import PathSecurityError, PolicyViolationError
 from ..executor import RunSpec, execute
 from ..models import PfdZapResult, ToolRunResult
+from ..path_security import resolve_run_artifact
 from ..policies import check_output_prefix, check_pfdzap_commands
 
 log = logging.getLogger("presto_mcp.tools.pfdzap")
@@ -47,15 +48,16 @@ def run_pfdzap(
         )
     prefix = check_output_prefix(output_prefix or DEFAULT_PREFIX)
 
-    pfd_basename = Path(pfd_file).name
+    host_pfd = resolve_run_artifact(pfd_file, s.runs_dir)
+    if host_pfd.suffix != ".pfd":
+        raise PathSecurityError(f"pfdzap expects a .pfd file; got {host_pfd.name}")
+    pfd_basename = host_pfd.name
     zap_filename = f"{prefix}.zap"
 
     def _stage(run_dir: Path, _extras: tuple[Path, ...]) -> None:
         artifacts_dir = run_dir / "artifacts"
         # Stage a copy of the source .pfd so we don't write into /runs (ro).
-        src = s.runs_dir / pfd_file
-        if src.is_file():
-            shutil.copy(src, artifacts_dir / pfd_basename)
+        shutil.copy(host_pfd, artifacts_dir / pfd_basename)
         # Write the sandboxed zap-commands file.
         (artifacts_dir / zap_filename).write_text(
             "\n".join(cmds) + "\n", encoding="utf-8"
@@ -101,7 +103,7 @@ def run_pfdzap(
 
     spec = RunSpec[PfdZapResult](
         tool_name="pfdzap",
-        input_file=pfd_file,
+        input_file=None,
         inputs_extra={
             "pfd_file": pfd_file,
             "output_prefix": prefix,
@@ -113,7 +115,6 @@ def run_pfdzap(
         timeout_s=s.default_timeout_s,
         cpus=s.default_cpus,
         memory_mb=s.default_memory_mb,
-        input_root="runs",
         container_workdir="/outputs/artifacts",
         pre_invocation_hook=_stage,
     )

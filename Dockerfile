@@ -8,12 +8,11 @@
 #   docker run --rm -i \
 #     -v /abs/path/to/data:/workspace/data:ro \
 #     -v /abs/path/to/runs:/workspace/runs \
-#     -v /var/run/docker.sock:/var/run/docker.sock \
 #     presto-mcp:latest
 #
-# NOTE: mounting docker.sock gives this container access to the host Docker
-# daemon so it can spawn alex88ridolfi/presto5:png sub-containers.
-# Keep this image off public registries if your data is sensitive.
+# NOTE: MVP production usage is host stdio (`uv run python -m presto_mcp.server`).
+# Do not mount docker.sock for this server; host Docker is invoked directly by
+# the stdio process.
 
 FROM python:3.11-slim
 

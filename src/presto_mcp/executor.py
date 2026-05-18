@@ -40,6 +40,9 @@ T = TypeVar("T", bound=BaseModel)
 
 InputRoot = Literal["data", "runs"]
 
+_SEMAPHORE_LOCK = threading.Lock()
+_SEMAPHORES: dict[int, threading.BoundedSemaphore] = {}
+
 
 @dataclass(frozen=True)
 class ExtraInput:
@@ -233,7 +236,18 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
     invocation = prepared.invocation
 
     log.info("execute tool=%s run_id=%s", spec.tool_name, run_id)
-    backend_result = prepared.backend.run(invocation, timeout_s=spec.timeout_s)
+    try:
+        backend_result = _run_backend_with_limit(prepared)
+    except Exception as e:  # noqa: BLE001
+        finished = _now_utc()
+        backend_result = BackendResult(
+            status=RunStatus.FAILED,
+            exit_code=None,
+            stdout="",
+            stderr="",
+            duration_s=(finished - prepared.started_at).total_seconds(),
+            error=f"backend failed: {type(e).__name__}: {e}",
+        )
 
     _persist_logs(run_dir, backend_result)
     artifacts = _collect_artifacts(run_dir)
@@ -301,8 +315,9 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
 def _background_worker(prepared: _PreparedRun[T]) -> None:
     try:
         _run_to_completion(prepared)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         log.exception("background run failed for %s", prepared.run_id)
+        _write_background_failure(prepared, e)
 
 
 def execute(
@@ -367,6 +382,53 @@ def execute(
         artifact_uris=[],
         error=None,
     )
+
+
+def _semaphore_for(limit: int) -> threading.BoundedSemaphore:
+    if limit < 1:
+        limit = 1
+    with _SEMAPHORE_LOCK:
+        sem = _SEMAPHORES.get(limit)
+        if sem is None:
+            sem = threading.BoundedSemaphore(limit)
+            _SEMAPHORES[limit] = sem
+        return sem
+
+
+def _run_backend_with_limit(prepared: _PreparedRun[T]) -> BackendResult:
+    sem = _semaphore_for(prepared.settings.max_concurrent_runs)
+    with sem:
+        return prepared.backend.run(prepared.invocation, timeout_s=prepared.spec.timeout_s)
+
+
+def _write_background_failure(prepared: _PreparedRun[T], exc: Exception) -> None:
+    finished_at = _now_utc()
+    duration = (finished_at - prepared.started_at).total_seconds()
+    artifacts = _collect_artifacts(prepared.run_dir)
+    manifest = RunManifest(
+        run_id=prepared.run_id,
+        tool=prepared.spec.tool_name,
+        status=RunStatus.FAILED,
+        exit_code=None,
+        started_at=prepared.started_at,
+        finished_at=finished_at,
+        duration_s=duration,
+        timeout_s=prepared.spec.timeout_s,
+        image=prepared.settings.image,
+        image_digest=None,
+        docker_argv=prepared.invocation.argv,
+        presto_argv=prepared.presto_argv,
+        inputs=prepared.inputs_log,
+        container_inputs=prepared.container_inputs,
+        cpus=prepared.spec.cpus,
+        memory_mb=prepared.spec.memory_mb,
+        artifacts=artifacts,
+        error=f"background run failed: {type(exc).__name__}: {exc}",
+    )
+    try:
+        write_manifest(prepared.run_dir, manifest)
+    except ManifestError:
+        log.exception("could not write background failure manifest for %s", prepared.run_id)
 
 
 def _safe_digest(backend: BackendProtocol, image: str) -> str | None:

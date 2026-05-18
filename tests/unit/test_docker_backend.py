@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,9 +10,11 @@ import pytest
 from presto_mcp.docker_backend import (
     CONTAINER_DATA_MOUNT,
     CONTAINER_OUTPUT_MOUNT,
+    DockerBackend,
     build_invocation,
 )
 from presto_mcp.errors import DockerInvocationError
+from presto_mcp.models import RunStatus
 
 
 @pytest.fixture
@@ -136,3 +139,35 @@ def test_argv_image_precedes_command(dirs: tuple[Path, Path]) -> None:
     image_idx = inv.argv.index("img:tag")
     cmd_idx = inv.argv.index("readfile")
     assert image_idx < cmd_idx
+
+
+def test_docker_backend_nonzero_exit_populates_error(
+    dirs: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data, run = dirs
+    inv = build_invocation(
+        image="img:tag",
+        presto_argv=["readfile", "/data/x.fil"],
+        data_dir=data,
+        run_dir=run,
+        cpus=1.0,
+        memory_mb=512,
+        container_name="c",
+    )
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        return subprocess.CompletedProcess(
+            argv,
+            125,
+            stdout="",
+            stderr="Cannot connect to the Docker daemon\n",
+        )
+
+    monkeypatch.setattr("presto_mcp.docker_backend.subprocess.run", fake_run)
+    result = DockerBackend(docker_bin="docker").run(inv, timeout_s=30)
+
+    assert result.status == RunStatus.FAILED
+    assert result.exit_code == 125
+    assert result.error is not None
+    assert "docker invocation failed" in result.error
+    assert "Cannot connect" in result.error

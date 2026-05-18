@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .config import Settings
 from .errors import ManifestError, PathSecurityError
-from .manifest import load_manifest
+from .manifest import get_manifest
 from .path_security import ensure_inside_root, is_run_id
 
 log = logging.getLogger("presto_mcp.resources")
@@ -37,7 +37,7 @@ def read_manifest_resource(settings: Settings, run_id: str) -> str:
     """Return the JSON text of ``runs/<id>/manifest.json``."""
     rd = _run_dir(settings, run_id)
     try:
-        manifest = load_manifest(rd)
+        manifest = get_manifest(settings.runs_dir, rd.name)
     except ManifestError as e:
         raise PathSecurityError(str(e)) from e
     return manifest.model_dump_json(indent=2)

@@ -12,15 +12,14 @@ Give an LLM safe, typed, reproducible access to the PRESTO pulsar/radio-astronom
 └──────────────────────────┬───────────────────────────────────┘
                            │ JSON-RPC over stdio
 ┌──────────────────────────▼───────────────────────────────────┐
-│ presto_mcp.server (FastMCP)                                  │
-│   - registers tools  (presto.readfile, .rfifind, .prepfold,  │
-│                       .list_runs, .get_run_manifest)         │
-│   - registers resources  (presto://runs/{id}/...)            │
+│ presto_mcp.server (FastMCP entrypoint)                       │
+│   - delegates registration to server_tools/resources/prompts │
+│   - owns FastMCP import, settings/backend singletons         │
 └──────────────────────────┬───────────────────────────────────┘
                            │ async wrappers → asyncio.to_thread
 ┌──────────────────────────▼───────────────────────────────────┐
-│ presto_mcp.tools.*  (pure async functions)                   │
-│   readfile / rfifind / prepfold / list_runs                  │
+│ presto_mcp.server_tools + tools.*                            │
+│   typed PRESTO wrappers + utility tools                      │
 └──────────────────────────┬───────────────────────────────────┘
                            │
 ┌──────────────────────────▼───────────────────────────────────┐
@@ -42,7 +41,8 @@ Give an LLM safe, typed, reproducible access to the PRESTO pulsar/radio-astronom
 │      --cpus N --memory Mm --stop-timeout 5                   │
 │      --mount type=bind,src=<DATA>,dst=/data,readonly         │
 │      --mount type=bind,src=<RUN_DIR>,dst=/outputs            │
-│      readfile | rfifind | prepfold                           │
+│      optional --mount type=bind,src=<RUNS>,dst=/runs,ro      │
+│      typed PRESTO command argv                               │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -68,11 +68,11 @@ The host never executes PRESTO binaries. The container never sees anything outsi
 |-------|---------|
 | Input path | `path_security.resolve_input_path` rejects absolute, `..`, backslash-prefixed; `Path.resolve(strict=True)`; must be under `DATA_DIR.resolve()`; case must match on-disk casing. |
 | Tool surface | One typed tool per binary. No `run_command`. No string concatenation. |
-| Subprocess | `shell=False`, argv list only. Timeout enforced. On `TimeoutExpired` → `docker kill <name>` → manifest status `TIMEOUT`. |
+| Subprocess | `shell=False`, argv list only. Timeout enforced. On timeout, Docker container is killed and manifest status is `TIMEOUT`. Docker calls are gated by `PRESTO_MAX_CONCURRENT_RUNS`. |
 | Container | `--network none`, `--security-opt no-new-privileges`, `--pids-limit 256`, `--cpus`, `--memory`, named container, `--rm`. |
-| Mounts | `data/` is `readonly`. Run dir is `rw` at `/outputs`. Nothing else mounted. |
+| Mounts | `data/` is `readonly`. Run dir is `rw` at `/outputs`. Prior-run artifact consumers may also mount `runs/` read-only at `/runs`. |
 | Resources | `presto://runs/{id}/artifacts/{filename}` rechecks `ensure_inside_root(run_dir/artifacts, filename)` before reading. Large files return metadata only. |
-| Errors | Typed: `PathSecurityError`, `DockerInvocationError`, `ParserError`, `PolicyViolationError`. No stack traces leak through MCP. |
+| Errors | Typed: `PathSecurityError`, `DockerInvocationError`, `ParserError`, `PolicyViolationError`. No stack traces leak through MCP; non-zero Docker/PRESTO exits carry bounded diagnostics. |
 
 ## Manifest model
 
@@ -106,15 +106,18 @@ The host never executes PRESTO binaries. The container never sees anything outsi
 
 Status values: `PENDING | RUNNING | SUCCESS | FAILED | TIMEOUT`.
 
-## MVP tools
+## Tool surface
 
-| Name                       | What it runs                                             | Result type          |
-|----------------------------|----------------------------------------------------------|----------------------|
-| `presto.readfile`          | `readfile /data/<file>`                                  | `ReadfileMetadata`   |
-| `presto.rfifind`           | `rfifind -time <t> -o /outputs/<prefix> /data/<file>`    | `RfifindSummary`     |
-| `presto.prepfold` (Mode A) | `prepfold -noxwin -p <p> -dm <dm> -o /outputs/<pre> ...` | `PrepfoldResult`     |
-| `presto.list_runs`         | filesystem glob over `runs/`                             | `list[RunSummary]`   |
-| `presto.get_run_manifest`  | load + return one manifest                               | `RunManifest`        |
+The server exposes typed PRESTO wrappers plus utility/navigation tools. Stable
+core includes `readfile`, `rfifind`, `prepdata`, `ddplan`, `prepsubband`,
+`realfft`, `accelsearch`, `single_pulse_search`, `sifting`, `prepfold`,
+`list_runs`, and `get_run_manifest`. Additional data-prep, RFI, fold-QC,
+timing, visualization, and advanced tools are registered in `server_tools.py`
+and marked `[experimental]` / `[advanced]` where image availability is not
+guaranteed.
+
+Utility tools (`validate_environment`, `list_data_files`, `summarize_run`,
+`inspect_artifacts`) never execute PRESTO. Prompts remain guidance only.
 
 ## Parser strategy (MVP)
 
@@ -143,7 +146,9 @@ runs/
 
 `outputs/` is reserved for human-facing exports (future phase); MVP never writes there from MCP tools.
 
-`list_runs` is `glob("runs/*/manifest.json") → load_manifest`. No SQLite in MVP.
+`list_runs` is `glob("runs/*/manifest.json") → load_manifest`. Stale `RUNNING`
+manifests older than their timeout are reported as failed views without
+rewriting history. No SQLite in MVP.
 
 ## Roadmap (post-MVP)
 

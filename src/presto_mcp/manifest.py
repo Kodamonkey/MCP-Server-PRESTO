@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import ManifestError
@@ -32,15 +34,15 @@ def write_manifest(run_dir: Path, manifest: RunManifest) -> Path:
         raise ManifestError(f"run_dir does not exist: {run_dir}")
 
     target = manifest_path(run_dir)
-    tmp = target.with_suffix(".json.tmp")
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
     payload = manifest.model_dump_json(indent=2)
     last_err: OSError | None = None
     for attempt in range(8):
         try:
-            tmp.write_text(payload, encoding="utf-8")
-            # On Windows, os.replace fails if readers still hold manifest.json.
-            if target.exists():
-                target.unlink()
+            with tmp.open("w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
             tmp.replace(target)
             last_err = None
             break
@@ -49,6 +51,10 @@ def write_manifest(run_dir: Path, manifest: RunManifest) -> Path:
             if attempt < 7:
                 time.sleep(0.05 * (attempt + 1))
     if last_err is not None:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            log.debug("could not remove temp manifest %s", tmp)
         raise ManifestError(f"failed to write manifest at {target}: {last_err}") from last_err
 
     log.debug("manifest written: %s", target)
@@ -104,6 +110,7 @@ def list_run_summaries(runs_root: Path, *, limit: int | None = None) -> list[Run
         except ManifestError as e:
             log.warning("skipping unreadable manifest %s: %s", run_id, e)
             continue
+        m = with_stale_status(m)
         summaries.append(
             RunSummary(
                 run_id=m.run_id,
@@ -123,7 +130,27 @@ def get_manifest(runs_root: Path, run_id: str) -> RunManifest:
         raise ManifestError(f"invalid run_id: {run_id!r}")
     run_dir = (runs_root / run_id).resolve()
     ensure_inside_root(run_dir, runs_root)
-    return load_manifest(run_dir)
+    return with_stale_status(load_manifest(run_dir))
+
+
+def with_stale_status(manifest: RunManifest, *, now: datetime | None = None) -> RunManifest:
+    """Return a view that marks timed-out RUNNING manifests as stale failures."""
+    if manifest.status != RunStatus.RUNNING or manifest.finished_at is not None:
+        return manifest
+    current = now or datetime.now(UTC)
+    elapsed = (current - manifest.started_at).total_seconds()
+    if elapsed <= manifest.timeout_s:
+        return manifest
+    return manifest.model_copy(
+        update={
+            "status": RunStatus.FAILED,
+            "duration_s": elapsed,
+            "error": (
+                "run appears stale: status RUNNING exceeded "
+                f"timeout_s={manifest.timeout_s}"
+            ),
+        }
+    )
 
 
 __all__ = [
@@ -134,5 +161,6 @@ __all__ = [
     "list_run_summaries",
     "load_manifest",
     "manifest_path",
+    "with_stale_status",
     "write_manifest",
 ]

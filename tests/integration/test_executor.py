@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -10,7 +11,12 @@ import pytest
 from presto_mcp.config import Settings
 from presto_mcp.executor import RunSpec, execute
 from presto_mcp.manifest import load_manifest
-from presto_mcp.models import ReadfileMetadata, RunStatus
+from presto_mcp.models import (
+    BackendResult,
+    DockerInvocation,
+    ReadfileMetadata,
+    RunStatus,
+)
 from tests.fakes.fake_docker_backend import FakeDockerBackend, FakeResponse
 
 
@@ -257,3 +263,119 @@ def test_execute_background_returns_running_then_completes(settings: Settings) -
     assert final.status == RunStatus.SUCCESS
     assert final.exit_code == 0
     assert (run_dir / "stdout.log").read_text(encoding="utf-8") == "hello readfile\n"
+
+
+class RaisingBackend:
+    def run(self, invocation: DockerInvocation, timeout_s: int) -> BackendResult:  # noqa: ARG002
+        raise RuntimeError("daemon unavailable")
+
+    def inspect_image_digest(self, image: str) -> str | None:  # noqa: ARG002
+        return None
+
+
+def test_execute_backend_exception_writes_failed_manifest(settings: Settings) -> None:
+    spec = RunSpec[ReadfileMetadata](
+        tool_name="readfile",
+        input_file="sample.fil",
+        inputs_extra={},
+        container_input_path="/data/sample.fil",
+        presto_argv_builder=_readfile_argv,
+        parser=_readfile_parser,
+        timeout_s=60,
+        cpus=2.0,
+        memory_mb=1024,
+    )
+
+    result = execute(spec, settings, RaisingBackend())
+
+    assert result.status == RunStatus.FAILED
+    assert result.error is not None
+    assert "backend failed" in result.error
+    m = load_manifest(settings.runs_dir / result.run_id)
+    assert m.status == RunStatus.FAILED
+    assert "daemon unavailable" in (m.error or "")
+
+
+def test_execute_background_backend_exception_finalizes_failed_manifest(
+    settings: Settings,
+) -> None:
+    spec = RunSpec[ReadfileMetadata](
+        tool_name="readfile",
+        input_file="sample.fil",
+        inputs_extra={},
+        container_input_path="/data/sample.fil",
+        presto_argv_builder=_readfile_argv,
+        parser=_readfile_parser,
+        timeout_s=60,
+        cpus=2.0,
+        memory_mb=1024,
+    )
+
+    result = execute(spec, settings, RaisingBackend(), background=True)
+    assert result.status == RunStatus.RUNNING
+
+    run_dir = settings.runs_dir / result.run_id
+    deadline = time.monotonic() + 5.0
+    final = load_manifest(run_dir)
+    while final.status == RunStatus.RUNNING and time.monotonic() < deadline:
+        time.sleep(0.05)
+        final = load_manifest(run_dir)
+
+    assert final.status == RunStatus.FAILED
+    assert final.error is not None
+    assert "daemon unavailable" in final.error
+
+
+class CountingBackend:
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.lock = threading.Lock()
+
+    def run(self, invocation: DockerInvocation, timeout_s: int) -> BackendResult:  # noqa: ARG002
+        with self.lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(0.15)
+            return BackendResult(
+                status=RunStatus.SUCCESS,
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_s=0.15,
+            )
+        finally:
+            with self.lock:
+                self.active -= 1
+
+    def inspect_image_digest(self, image: str) -> str | None:  # noqa: ARG002
+        return None
+
+
+def test_execute_respects_max_concurrent_runs(settings: Settings) -> None:
+    limited = settings.with_overrides(max_concurrent_runs=1)
+    backend = CountingBackend()
+
+    def run_one() -> None:
+        spec = RunSpec[ReadfileMetadata](
+            tool_name="readfile",
+            input_file="sample.fil",
+            inputs_extra={},
+            container_input_path="/data/sample.fil",
+            presto_argv_builder=_readfile_argv,
+            parser=_readfile_parser,
+            timeout_s=60,
+            cpus=2.0,
+            memory_mb=1024,
+        )
+        result = execute(spec, limited, backend)
+        assert result.status == RunStatus.SUCCESS
+
+    threads = [threading.Thread(target=run_one) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert backend.max_active == 1

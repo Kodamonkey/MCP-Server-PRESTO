@@ -122,6 +122,10 @@ Tools tagged *(experimental)* / *(advanced)* may not be available in every PREST
 docker run --rm alex88ridolfi/presto5:png which readfile rfifind prepfold
 ```
 
+Startup health checks call `docker info`, not only `docker --version`; Docker
+Desktop / daemon must be running. `presto.validate_environment` reports CLI,
+daemon, and image checks separately.
+
 On Windows with OneDrive: ensure `data/` files are **“Always keep on this device”** (0-byte placeholders fail the startup check).
 
 ---
@@ -132,7 +136,7 @@ On Windows with OneDrive: ensure `data/` files are **“Always keep on this devi
 uv run python -m presto_mcp.server
 ```
 
-Loads `PRESTO_*` from `.env` and the environment, creates `runs/`, `outputs/`, `logs/`, runs a health check, then speaks MCP over stdio.
+Loads `PRESTO_*` from `.env` and the environment, creates `runs/`, `outputs/`, `logs/`, runs a daemon-aware health check, then speaks MCP over stdio.
 
 ---
 
@@ -190,7 +194,7 @@ presto://runs/{run_id}/summary             # RunStructuredSummary JSON
 presto://runs/{run_id}/artifacts           # ArtifactSummary list (no contents)
 ```
 
-**Prompts** — see [PROMPTS.md](./PROMPTS.md). Six guidance prompts (`presto.inspect_observation_plan`, `presto.single_pulse_search_plan`, `presto.periodic_search_plan`, `presto.fold_known_candidate_plan`, `presto.explain_failed_run`, `presto.generate_candidate_report_plan`). They appear automatically in MCP Inspector and any client that surfaces prompts. **Prompts are guidance — the MCP server does not orchestrate or auto-execute.**
+**Prompts** — see [PROMPTS.md](./PROMPTS.md). Guidance prompts appear automatically in MCP Inspector and any client that surfaces prompts. **Prompts are guidance — the MCP server does not orchestrate or auto-execute.**
 
 **Separation of responsibilities.** The MCP layer ships atomic, sandboxed capabilities (tools), navigable state (resources), and reusable guidance (prompts). Stateful / adaptive orchestration (looping over candidates, branching on results, retries with parameter tweaks) belongs to a future LangGraph (or equivalent) layer above this MCP — not inside it.
 
@@ -200,7 +204,8 @@ presto://runs/{run_id}/artifacts           # ArtifactSummary list (no contents)
 
 - Inputs validated by `path_security` — no absolute paths, no `..`, only under `DATA_DIR` or staged run artifacts.
 - Execution: `subprocess.run(argv, shell=False)` only; no generic shell tool.
-- Docker: `--network none`, `no-new-privileges`, `--pids-limit 256`, read-only `data/` bind.
+- Docker: `--network none`, `no-new-privileges`, `--pids-limit 256`, read-only `data/` bind, optional read-only `/runs` bind for prior artifacts.
+- Concurrency: `PRESTO_MAX_CONCURRENT_RUNS` gates Docker invocations process-wide (default `1`).
 - Typed errors only — no raw stack traces to clients.
 
 Details: [ARCHITECTURE.md](./ARCHITECTURE.md). Agent conventions: [AGENTS.md](./AGENTS.md).
@@ -213,6 +218,7 @@ Details: [ARCHITECTURE.md](./ARCHITECTURE.md). Agent conventions: [AGENTS.md](./
 - `**prepfold` Mode A** — known period + DM; accel-cand folding is not wired yet.
 - **STDIO only** — no HTTP transport.
 - `**list_runs`** walks `runs/*/manifest.json` (fine for thousands of runs).
+- Stdout/stderr are still captured in memory before writing logs; diagnostics returned to clients are bounded, full logs remain in run resources.
 
 ---
 
@@ -222,6 +228,9 @@ Details: [ARCHITECTURE.md](./ARCHITECTURE.md). Agent conventions: [AGENTS.md](./
 | Path                               | Role                                                     |
 | ---------------------------------- | -------------------------------------------------------- |
 | `src/presto_mcp/server.py`         | FastMCP entrypoint                                       |
+| `src/presto_mcp/server_tools.py`   | MCP tool registration                                    |
+| `src/presto_mcp/server_resources.py` | MCP resource registration                              |
+| `src/presto_mcp/server_prompts.py` | MCP prompt registration                                  |
 | `src/presto_mcp/docker_backend.py` | Docker argv + subprocess                                 |
 | `src/presto_mcp/path_security.py`  | Path guards                                              |
 | `src/presto_mcp/executor.py`       | Run orchestration                                        |
