@@ -171,3 +171,29 @@ def test_docker_backend_nonzero_exit_populates_error(
     assert result.error is not None
     assert "docker invocation failed" in result.error
     assert "Cannot connect" in result.error
+
+
+def test_docker_backend_detaches_stdin(
+    dirs: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MCP stdio must never be inherited by the docker CLI."""
+    data, run = dirs
+    inv = build_invocation(
+        image="img:tag",
+        presto_argv=["readfile", "/data/x.fil"],
+        data_dir=data,
+        run_dir=run,
+        cpus=1.0,
+        memory_mb=512,
+        container_name="c",
+    )
+    seen: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("presto_mcp.docker_backend.subprocess.run", fake_run)
+    DockerBackend(docker_bin="docker").run(inv, timeout_s=30)
+
+    assert seen["stdin"] == subprocess.DEVNULL

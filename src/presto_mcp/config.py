@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import stat
 import subprocess
 from dataclasses import dataclass, replace
 from functools import lru_cache
@@ -21,6 +22,14 @@ from dotenv import load_dotenv
 log = logging.getLogger("presto_mcp.config")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+_RECALL_ON_OPEN = 0x00040000
+_RECALL_ON_DATA_ACCESS = 0x00400000
+_CLOUD_PLACEHOLDER_FLAGS = (
+    getattr(stat, "FILE_ATTRIBUTE_OFFLINE", 0x00001000),
+    _RECALL_ON_OPEN,
+    _RECALL_ON_DATA_ACCESS,
+)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -87,7 +96,7 @@ def _load_from_env() -> Settings:
         default_timeout_s=int(os.environ.get("PRESTO_DEFAULT_TIMEOUT_SECONDS", "1800")),
         network=os.environ.get("PRESTO_NETWORK", "none"),
         skip_healthcheck=_env_bool("PRESTO_SKIP_HEALTHCHECK", False),
-        max_concurrent_runs=_env_int_min("PRESTO_MAX_CONCURRENT_RUNS", 1, 1),
+        max_concurrent_runs=_env_int_min("PRESTO_MAX_CONCURRENT_RUNS", 2, 1),
     )
 
 
@@ -101,6 +110,32 @@ def ensure_runtime_dirs(s: Settings) -> None:
     """Create runs/outputs/logs if missing. ``data/`` must already exist."""
     for d in (s.runs_dir, s.outputs_dir, s.logs_dir):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def has_cloud_placeholder_attributes(path: Path) -> bool:
+    """Return true for OneDrive/cloud files not fully present on disk."""
+    try:
+        attrs = getattr(path.stat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return any(attrs & flag for flag in _CLOUD_PLACEHOLDER_FLAGS)
+
+
+def find_cloud_placeholder_files(data_dir: Path) -> list[Path]:
+    placeholders: list[Path] = []
+    try:
+        children = list(data_dir.iterdir())
+    except OSError:
+        return placeholders
+    for p in children:
+        if p.name.startswith("."):
+            continue
+        try:
+            if p.is_file() and has_cloud_placeholder_attributes(p):
+                placeholders.append(p)
+        except OSError:
+            continue
+    return placeholders
 
 
 class HealthCheckError(RuntimeError):
@@ -126,6 +161,7 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
         )
 
     placeholders: list[Path] = []
+    cloud_placeholders: list[Path] = []
     has_observation_data = False
     for p in s.data_dir.iterdir():
         if not p.is_file():
@@ -135,8 +171,11 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
             continue
         has_observation_data = True
         try:
-            if p.stat().st_size == 0:
+            st = p.stat()
+            if st.st_size == 0:
                 placeholders.append(p)
+            if has_cloud_placeholder_attributes(p):
+                cloud_placeholders.append(p)
         except OSError as e:
             raise HealthCheckError(f"Cannot stat data file {p}: {e}") from e
 
@@ -154,6 +193,14 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
             f"device' and wait for sync to finish."
         )
 
+    if cloud_placeholders:
+        names = ", ".join(p.name for p in cloud_placeholders)
+        raise HealthCheckError(
+            f"Cloud-only data files detected (OneDrive placeholders): {names}. "
+            f"In Windows Explorer, right-click data/ -> 'Always keep on this "
+            f"device' and wait for sync to finish."
+        )
+
     docker = docker_bin or shutil.which("docker")
     if not docker:
         raise HealthCheckError(
@@ -166,6 +213,7 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
             [docker, "info"],
             check=True,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             timeout=10,
             shell=False,
         )

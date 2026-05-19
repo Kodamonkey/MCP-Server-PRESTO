@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from ..config import Settings, get_settings
+from ..config import Settings, find_cloud_placeholder_files, get_settings
 from ..models import EnvironmentCheck, EnvironmentCheckStatus, ValidateEnvironmentResult
 
 log = logging.getLogger("presto_mcp.tools.validate_environment")
@@ -68,6 +68,7 @@ def _check_data_dir(s: Settings) -> list[EnvironmentCheck]:
 
     has_files = False
     placeholders: list[str] = []
+    cloud_placeholders: list[str] = []
     try:
         for p in s.data_dir.iterdir():
             if not p.is_file() or p.name.startswith("."):
@@ -78,6 +79,7 @@ def _check_data_dir(s: Settings) -> list[EnvironmentCheck]:
                     placeholders.append(p.name)
             except OSError:
                 continue
+        cloud_placeholders = [p.name for p in find_cloud_placeholder_files(s.data_dir)]
     except OSError as e:
         checks.append(
             EnvironmentCheck(
@@ -111,6 +113,21 @@ def _check_data_dir(s: Settings) -> list[EnvironmentCheck]:
                 message=f"zero-byte files (likely OneDrive placeholders): {names}",
                 remediation=(
                     "In Windows Explorer right-click data/ → 'Always keep on this "
+                    "device' and wait for sync to finish."
+                ),
+            )
+        )
+    if cloud_placeholders:
+        names = ", ".join(cloud_placeholders[:5]) + (
+            " ..." if len(cloud_placeholders) > 5 else ""
+        )
+        checks.append(
+            EnvironmentCheck(
+                name="data_dir.cloud_placeholders",
+                status="WARN",
+                message=f"cloud-only files (OneDrive placeholders): {names}",
+                remediation=(
+                    "In Windows Explorer right-click data/ -> 'Always keep on this "
                     "device' and wait for sync to finish."
                 ),
             )
@@ -152,6 +169,7 @@ def _check_docker_cli() -> tuple[str | None, list[EnvironmentCheck]]:
             [docker, "--version"],
             check=False,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             timeout=_DOCKER_PROBE_TIMEOUT_S,
             shell=False,
         )
@@ -188,6 +206,7 @@ def _check_docker_daemon(docker: str) -> EnvironmentCheck:
             [docker, "info"],
             check=False,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             timeout=_DOCKER_PROBE_TIMEOUT_S,
             shell=False,
         )
@@ -217,6 +236,7 @@ def _check_image(docker: str, image: str) -> EnvironmentCheck:
             [docker, "image", "inspect", image],
             check=False,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             timeout=_IMAGE_PROBE_TIMEOUT_S,
             shell=False,
         )
@@ -247,6 +267,8 @@ def _check_policies(s: Settings) -> EnvironmentCheck:
         issues.append("default_memory_mb < 512")
     if s.default_timeout_s < 30:
         issues.append("default_timeout_s < 30")
+    if s.max_concurrent_runs < 1:
+        issues.append("max_concurrent_runs < 1")
     if issues:
         return EnvironmentCheck(
             name="policy.defaults",
@@ -259,7 +281,8 @@ def _check_policies(s: Settings) -> EnvironmentCheck:
         status="OK",
         message=(
             f"cpus={s.default_cpus} memory_mb={s.default_memory_mb} "
-            f"timeout_s={s.default_timeout_s}"
+            f"timeout_s={s.default_timeout_s} "
+            f"max_concurrent_runs={s.max_concurrent_runs}"
         ),
     )
 

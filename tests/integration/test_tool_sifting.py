@@ -53,7 +53,9 @@ def settings(tmp_path: Path) -> Settings:
 def test_sifting_stages_and_argv(settings: Settings) -> None:
     backend = FakeDockerBackend(
         responses={
-            "ACCEL_sift.py": FakeResponse(stdout=_SIFT_STDOUT, status=RunStatus.SUCCESS)
+            "/software/presto5/examplescripts/ACCEL_sift.py": FakeResponse(
+                stdout=_SIFT_STDOUT, status=RunStatus.SUCCESS
+            )
         }
     )
     result = run_sifting(
@@ -72,7 +74,7 @@ def test_sifting_stages_and_argv(settings: Settings) -> None:
     assert len(result.result.surviving_candidates) == 1
 
     argv = backend.calls[0].invocation.argv
-    assert "ACCEL_sift.py" in argv
+    assert "/software/presto5/examplescripts/ACCEL_sift.py" in argv
     assert "--minDMs" in argv and "2" in argv
     assert "--lowDM" in argv
     assert "--sigma" in argv

@@ -68,8 +68,8 @@ def test_get_toas_argv_and_parse(settings: Settings) -> None:
     argv = backend.calls[0].invocation.argv
     assert "get_TOAs.py" in argv
     assert "-g" in argv and "/data/sample.gaussians" in argv
-    assert "-s" in argv and "2" in argv
-    assert "-n" in argv and "4" in argv
+    assert argv[argv.index("-n") + 1] == "2"
+    assert argv[argv.index("-s") + 1] == "4"
     pfd_container = f"/runs/{PRIOR_RUN_ID}/artifacts/prep.pfd"
     assert pfd_container in argv
 
@@ -82,6 +82,46 @@ def test_get_toas_argv_and_parse(settings: Settings) -> None:
     assert m.tool == "get_toas"
     assert m.container_inputs["input_file"] == pfd_container
     assert m.container_inputs["extra_input_0"] == "/data/sample.gaussians"
+
+
+def test_get_toas_accepts_numeric_gaussian_width(settings: Settings) -> None:
+    backend = FakeDockerBackend(
+        responses={
+            "get_TOAs.py": FakeResponse(stdout=_TOAS_STDOUT, status=RunStatus.SUCCESS)
+        }
+    )
+    result = run_get_toas(
+        f"{PRIOR_RUN_ID}/artifacts/prep.pfd",
+        backend=backend,
+        gaussian_width=0.1,
+        settings=settings,
+    )
+    assert result.status == RunStatus.SUCCESS
+    assert result.result is not None
+    assert result.result.template_file == "gaussian_width=0.1"
+
+    argv = backend.calls[0].invocation.argv
+    assert argv[argv.index("-g") + 1] == "0.1"
+    m = load_manifest(settings.runs_dir / result.run_id)
+    assert "extra_input_0" not in m.container_inputs
+
+
+def test_get_toas_requires_one_template_source(settings: Settings) -> None:
+    backend = FakeDockerBackend()
+    with pytest.raises(PolicyViolationError):
+        run_get_toas(
+            f"{PRIOR_RUN_ID}/artifacts/prep.pfd",
+            backend=backend,
+            settings=settings,
+        )
+    with pytest.raises(PolicyViolationError):
+        run_get_toas(
+            f"{PRIOR_RUN_ID}/artifacts/prep.pfd",
+            "sample.gaussians",
+            backend=backend,
+            gaussian_width=0.1,
+            settings=settings,
+        )
 
 
 @pytest.mark.parametrize("nsi", [0, 5000])

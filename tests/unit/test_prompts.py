@@ -91,7 +91,6 @@ from presto_mcp import prompts
             ("20260516T143052Z-K7QM3A/artifacts/fold.pfd",),
             [
                 "presto.pfd2png",
-                "presto.pfdzap",
                 "presto.get_toas",
                 "presto.sum_profiles",
             ],
@@ -104,7 +103,6 @@ from presto_mcp import prompts
                 "presto.accelsearch",
                 "presto.sifting",
                 "presto.prepfold",
-                "presto.fourier_fold",
                 "presto.search_bin",
             ],
         ),

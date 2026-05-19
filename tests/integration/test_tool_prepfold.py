@@ -73,6 +73,7 @@ def test_prepfold_argv_and_artifacts(settings: Settings) -> None:
     argv = backend.calls[0].invocation.argv
     assert "prepfold" in argv
     assert "-noxwin" in argv
+    assert "-nosearch" in argv
     assert "-p" in argv
     assert "-dm" in argv
     assert "/outputs/artifacts/fold_test" in argv

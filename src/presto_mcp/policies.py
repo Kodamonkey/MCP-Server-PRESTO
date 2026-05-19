@@ -96,6 +96,8 @@ TOAS_SUBINTS_MIN = 1
 TOAS_SUBINTS_MAX = 4096
 TOAS_SUBBANDS_MIN = 1
 TOAS_SUBBANDS_MAX = 4096
+TOAS_GAUSSIAN_WIDTH_MIN = 1e-6
+TOAS_GAUSSIAN_WIDTH_MAX = 1.0
 
 
 def check_timeout(timeout_s: int) -> int:
@@ -316,6 +318,18 @@ def check_toas_subbands(n: int) -> int:
             f"num_subbands {n} outside [{TOAS_SUBBANDS_MIN}, {TOAS_SUBBANDS_MAX}]"
         )
     return n
+
+
+def check_toas_gaussian_width(width: float | None) -> float | None:
+    if width is None:
+        return None
+    f = float(width)
+    if not (TOAS_GAUSSIAN_WIDTH_MIN <= f <= TOAS_GAUSSIAN_WIDTH_MAX):
+        raise PolicyViolationError(
+            f"gaussian_width {width} outside "
+            f"[{TOAS_GAUSSIAN_WIDTH_MIN}, {TOAS_GAUSSIAN_WIDTH_MAX}]"
+        )
+    return f
 
 
 def check_ddplan_freq(freq_mhz: float) -> float:

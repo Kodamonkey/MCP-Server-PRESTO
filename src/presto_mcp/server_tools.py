@@ -19,14 +19,12 @@ from .models import (
     DDplanResult,
     DownsampleFilterbankResult,
     FbTruncateResult,
-    FourierFoldResult,
     GetTOAsResult,
     InspectArtifactsResult,
     ListDataFilesResult,
     MakeSpdResult,
     MakeZaplistResult,
     Pfd2PngResult,
-    PfdZapResult,
     PlotSpdResult,
     PrepdataResult,
     PrepfoldResult,
@@ -55,13 +53,11 @@ from .tools.accelsearch import run_accelsearch
 from .tools.ddplan import run_ddplan
 from .tools.downsample_filterbank import run_downsample_filterbank
 from .tools.fb_truncate import run_fb_truncate
-from .tools.fourier_fold import run_fourier_fold
 from .tools.get_toas import run_get_toas
 from .tools.list_data_files import run_list_data_files
 from .tools.make_spd import run_make_spd
 from .tools.makezaplist import run_makezaplist
 from .tools.pfd2png import run_pfd2png
-from .tools.pfdzap import run_pfdzap
 from .tools.plot_spd import run_plot_spd
 from .tools.prepdata import run_prepdata
 from .tools.prepfold import run_prepfold
@@ -507,9 +503,10 @@ def register_tools(
         name="presto.get_toas",
         description=(
             "Run PRESTO 'get_TOAs.py' inside Docker to compute Times of Arrival "
-            "from a folded .pfd plus a Gaussian template. pfd_file is "
-            "'<run_id>/artifacts/<file>.pfd' relative to RUNS_DIR; template_file "
-            "is relative to DATA_DIR. Returns TEMPO/TEMPO2 TOA lines."
+            "from a folded .pfd plus either a Gaussian template file or a "
+            "numeric Gaussian FWHM width. pfd_file is '<run_id>/artifacts/"
+            "<file>.pfd' relative to RUNS_DIR; template_file is relative to "
+            "DATA_DIR when provided. Returns TEMPO/TEMPO2 TOA lines."
         ),
     )
     async def presto_get_toas(
@@ -518,17 +515,32 @@ def register_tools(
             Field(description="<run_id>/artifacts/<file>.pfd relative to RUNS_DIR."),
         ],
         template_file: Annotated[
-            str,
-            Field(description="Gaussian template (.gaussians/.template) relative to DATA_DIR."),
-        ],
+            str | None,
+            Field(
+                default=None,
+                description="Gaussian template (.gaussians/.template) relative to DATA_DIR.",
+            ),
+        ] = None,
         num_subints: Annotated[
             int,
-            Field(default=1, ge=1, le=4096, description="Number of sub-integrations."),
+            Field(default=1, ge=1, le=4096, description="Number of TOAs / time parts (-n)."),
         ] = 1,
         num_subbands: Annotated[
             int,
-            Field(default=1, ge=1, le=4096, description="Number of frequency subbands."),
+            Field(default=1, ge=1, le=4096, description="Number of frequency subbands (-s)."),
         ] = 1,
+        gaussian_width: Annotated[
+            float | None,
+            Field(
+                default=None,
+                gt=0.0,
+                le=1.0,
+                description=(
+                    "Optional Gaussian FWHM width for PRESTO -g. Provide exactly "
+                    "one of template_file or gaussian_width."
+                ),
+            ),
+        ] = None,
         background: Annotated[
             bool,
             Field(default=False, description="Return RUNNING; poll get_run_manifest."),
@@ -541,6 +553,7 @@ def register_tools(
             backend=_backend_for_tools(),
             num_subints=num_subints,
             num_subbands=num_subbands,
+            gaussian_width=gaussian_width,
             settings=_settings_for_tools(),
             background=background,
         )
@@ -998,49 +1011,6 @@ def register_tools(
             background=background,
         )
 
-
-    @mcp.tool(
-        name="presto.pfdzap",
-        description=(
-            "[experimental] Run PRESTO 'pfdzap.py' inside Docker to apply simple "
-            "interval/channel zapping to a .pfd. zap_commands is a list of strict "
-            "'<low>:<high>' tokens (max 512); arbitrary shell input is rejected. "
-            "pfd_file is '<run_id>/artifacts/<file>.pfd' relative to RUNS_DIR."
-        ),
-    )
-    async def presto_pfdzap(
-        pfd_file: Annotated[
-            str,
-            Field(description="<run_id>/artifacts/<file>.pfd relative to RUNS_DIR."),
-        ],
-        zap_commands: Annotated[
-            list[str],
-            Field(
-                description="List of '<low>:<high>' tokens (e.g. ['10:20','60:70']).",
-                min_length=1,
-                max_length=512,
-            ),
-        ],
-        output_prefix: Annotated[
-            str | None,
-            Field(default=None, description="Output filename prefix. Defaults to 'pfdzap'."),
-        ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
-    ) -> ToolRunResult[PfdZapResult]:
-        return await asyncio.to_thread(
-            run_pfdzap,
-            pfd_file,
-            backend=_backend_for_tools(),
-            zap_commands=zap_commands,
-            output_prefix=output_prefix,
-            settings=_settings_for_tools(),
-            background=background,
-        )
-
-
     @mcp.tool(
         name="presto.makezaplist",
         description=(
@@ -1100,50 +1070,6 @@ def register_tools(
             settings=_settings_for_tools(),
             background=background,
         )
-
-
-    @mcp.tool(
-        name="presto.fourier_fold",
-        description=(
-            "[experimental] Run PRESTO 'fourier_fold.py' inside Docker to fold a "
-            ".fft at a known (period_seconds OR frequency_hz, optional dm). "
-            "Exactly one of period_seconds / frequency_hz must be supplied. "
-            "fft_file is '<run_id>/artifacts/<file>.fft' relative to RUNS_DIR."
-        ),
-    )
-    async def presto_fourier_fold(
-        fft_file: Annotated[
-            str,
-            Field(description="<run_id>/artifacts/<file>.fft relative to RUNS_DIR."),
-        ],
-        period_seconds: Annotated[
-            float | None,
-            Field(default=None, gt=0.0, le=60.0, description="Candidate spin period (s)."),
-        ] = None,
-        frequency_hz: Annotated[
-            float | None,
-            Field(default=None, gt=0.0, description="Candidate spin frequency (Hz)."),
-        ] = None,
-        dm: Annotated[
-            float | None,
-            Field(default=None, ge=0.0, le=10_000.0, description="Dispersion measure (pc cm^-3)."),
-        ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
-    ) -> ToolRunResult[FourierFoldResult]:
-        return await asyncio.to_thread(
-            run_fourier_fold,
-            fft_file,
-            backend=_backend_for_tools(),
-            period_seconds=period_seconds,
-            frequency_hz=frequency_hz,
-            dm=dm,
-            settings=_settings_for_tools(),
-            background=background,
-        )
-
 
     @mcp.tool(
         name="presto.sum_profiles",

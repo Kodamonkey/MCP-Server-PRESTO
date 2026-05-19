@@ -140,16 +140,12 @@ def test_06_prepfold_then_get_toas(backend_and_settings) -> None:
     )
     if fold.status != RunStatus.SUCCESS or fold.result is None or not fold.result.pfd_file:
         pytest.skip(f"prepfold did not produce a .pfd: {fold.error}")
-    # get_TOAs needs a template; this test only runs if one is staged in data/.
-    template_candidates = sorted(s.data_dir.glob("*.gaussians")) + sorted(
-        s.data_dir.glob("*.template")
-    )
-    if not template_candidates:
-        pytest.skip("no .gaussians/.template file in DATA_DIR for get_TOAs")
-    template = template_candidates[0].name
     result = run_get_toas(
         f"{fold.run_id}/artifacts/{fold.result.pfd_file}",
-        template,
-        backend=backend, num_subints=1, num_subbands=1, settings=s,
+        backend=backend,
+        num_subints=1,
+        num_subbands=1,
+        gaussian_width=0.1,
+        settings=s,
     )
     assert result.status in {RunStatus.SUCCESS, RunStatus.FAILED}, result.error

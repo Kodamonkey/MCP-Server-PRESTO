@@ -85,7 +85,7 @@ def run_sifting(
     ) -> list[str]:
         # ACCEL_sift.py reads its current working directory; -w sets it.
         return [
-            "ACCEL_sift.py",
+            "/software/presto5/examplescripts/ACCEL_sift.py",
             "--minDMs", str(md),
             "--lowDM", str(lo),
             "--sigma", str(sig),

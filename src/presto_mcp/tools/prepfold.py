@@ -64,6 +64,7 @@ def run_prepfold(
         return [
             "prepfold",
             "-noxwin",
+            "-nosearch",
             "-p", str(p),
             "-dm", str(d),
             "-o", f"/outputs/artifacts/{prefix}",

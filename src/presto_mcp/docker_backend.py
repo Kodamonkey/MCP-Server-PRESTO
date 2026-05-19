@@ -135,6 +135,7 @@ class DockerBackend:
             cp = subprocess.run(
                 argv,
                 shell=False,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
@@ -175,6 +176,7 @@ class DockerBackend:
             subprocess.run(
                 [self.docker_bin, "kill", name],
                 shell=False,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=10,
                 check=False,
@@ -187,6 +189,7 @@ class DockerBackend:
             cp = subprocess.run(
                 [self.docker_bin, "image", "inspect", "--format", "{{index .RepoDigests 0}}", image],
                 shell=False,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=15,
