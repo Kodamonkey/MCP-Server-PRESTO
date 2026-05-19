@@ -107,6 +107,20 @@ _RUN_ARTIFACT_RE = re.compile(
 )
 
 
+def is_run_artifact_path(s: str) -> bool:
+    """Return True if ``s`` matches the ``<run_id>/artifacts/<filename>`` shape.
+
+    Shape check only — no filesystem access, no existence guarantee. Callers
+    use this to choose between ``root="data"`` and ``root="runs"`` when an
+    input can come from either; the full security check still happens via
+    :func:`resolve_input_path` or :func:`resolve_run_artifact` downstream.
+    """
+    if not isinstance(s, str) or not s:
+        return False
+    normalized = s.replace("\\", "/")
+    return bool(_RUN_ARTIFACT_RE.match(normalized))
+
+
 def resolve_run_artifact(rel_path: str, runs_root: Path) -> Path:
     """Resolve ``<run_id>/artifacts/<filename>`` against ``runs_root``.
 

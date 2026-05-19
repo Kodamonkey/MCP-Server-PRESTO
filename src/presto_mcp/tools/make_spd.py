@@ -18,7 +18,7 @@ from pathlib import Path
 from ..config import Settings, get_settings
 from ..docker_backend import BackendProtocol
 from ..errors import PathSecurityError
-from ..executor import ExtraInput, RunSpec, execute
+from ..executor import ExtraInput, RunSpec, execute, extra_input_for
 from ..models import MakeSpdResult, ToolRunResult
 from ..parsers import make_spd_parser
 from ..path_security import resolve_run_artifact
@@ -44,7 +44,8 @@ def run_make_spd(
     * ``raw_file``: relative to ``DATA_DIR``.
     * ``groups_file``: ``<run_id>/artifacts/<file>.txt`` relative to ``RUNS_DIR``.
     * ``singlepulse_files``: list of ``<run_id>/artifacts/<file>.singlepulse``.
-    * ``mask_file`` (optional): relative to ``DATA_DIR``.
+    * ``mask_file`` (optional): either relative to ``DATA_DIR`` or
+      ``<run_id>/artifacts/<file>.mask`` from a prior ``rfifind`` run.
     """
     s = settings or get_settings()
     check_makespd_input_count(len(singlepulse_files))
@@ -79,7 +80,7 @@ def run_make_spd(
 
     extras_list: list[ExtraInput] = [ExtraInput(path=raw_file, root="data")]
     if mask_file is not None:
-        extras_list.append(ExtraInput(path=mask_file, root="data"))
+        extras_list.append(extra_input_for(mask_file))
     extras = tuple(extras_list)
 
     def hook(run_dir: Path, _extras: tuple[Path, ...]) -> None:

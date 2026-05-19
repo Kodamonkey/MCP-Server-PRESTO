@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..config import Settings, get_settings
 from ..docker_backend import BackendProtocol
-from ..executor import ExtraInput, RunSpec, execute
+from ..executor import ExtraInput, RunSpec, execute, extra_input_for
 from ..models import PrepdataResult, ToolRunResult
 from ..parsers import prepdata_parser
 from ..policies import check_dm, check_output_prefix
@@ -29,8 +29,11 @@ def run_prepdata(
 ) -> ToolRunResult[PrepdataResult]:
     """``prepdata -dm <dm> -o /outputs/artifacts/<prefix> /data/<input>``.
 
-    Optional ``mask_file`` is interpreted as a path relative to ``DATA_DIR``
-    (PRESTO needs the mask file at run time).
+    Optional ``mask_file`` can be either a path relative to ``DATA_DIR`` or a
+    ``<run_id>/artifacts/<file>.mask`` produced by a prior ``rfifind`` run; the
+    root is detected from the path shape. Using a prior-run artifact avoids
+    copying the mask + its companion files (``.inf``, ``.bytemask``, ``.rfi``,
+    ``.stats``) into ``DATA_DIR`` — PRESTO reads them from ``/runs`` instead.
     """
     s = settings or get_settings()
     d = check_dm(dm)
@@ -39,7 +42,7 @@ def run_prepdata(
     extras: tuple[ExtraInput, ...] = ()
     inputs_extra: dict[str, str] = {"dm": str(d), "output_prefix": prefix}
     if mask_file:
-        extras = (ExtraInput(path=mask_file, root="data"),)
+        extras = (extra_input_for(mask_file),)
         inputs_extra["mask_file"] = mask_file
 
     def argv_builder(

@@ -13,6 +13,8 @@ from presto_mcp.models import RunStatus
 from presto_mcp.tools.prepdata import run_prepdata
 from tests.fakes.fake_docker_backend import FakeDockerBackend, FakeResponse
 
+PRIOR_RUN_ID = "20260517T120000Z-MMMMMM"
+
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
@@ -20,10 +22,18 @@ def settings(tmp_path: Path) -> Settings:
     data.mkdir()
     (data / "input.fil").write_bytes(b"\x00" * 16)
     (data / "noise.mask").write_bytes(b"M")
+
+    runs = tmp_path / "runs"
+    prior = runs / PRIOR_RUN_ID / "artifacts"
+    prior.mkdir(parents=True)
+    # Mock an rfifind output set: PRESTO needs all five companions next to .mask.
+    for ext in (".mask", ".bytemask", ".inf", ".rfi", ".stats"):
+        (prior / f"rfi_rfifind{ext}").write_bytes(b"X")
+
     return Settings(
         image="alex88ridolfi/presto5:png",
         data_dir=data.resolve(),
-        runs_dir=(tmp_path / "runs").resolve(),
+        runs_dir=runs.resolve(),
         outputs_dir=(tmp_path / "outputs").resolve(),
         logs_dir=(tmp_path / "logs").resolve(),
         default_cpus=2.0,
@@ -88,6 +98,43 @@ def test_prepdata_with_mask_file(settings: Settings) -> None:
 
     m = load_manifest(settings.runs_dir / result.run_id)
     assert m.container_inputs["extra_input_0"] == "/data/noise.mask"
+
+
+def test_prepdata_with_mask_from_prior_run(settings: Settings) -> None:
+    """Mask path of the form ``<run_id>/artifacts/<file>.mask`` should be
+    resolved against ``RUNS_DIR`` and the ``/runs`` mount must appear in the
+    Docker argv. This is the fix for the rfifind→prepdata chain where copying
+    rfifind output into DATA_DIR was previously required."""
+    backend = FakeDockerBackend(
+        responses={
+            "prepdata": FakeResponse(
+                stdout="ok\n", status=RunStatus.SUCCESS,
+                artifacts={"prep.dat": b"D"},
+            )
+        }
+    )
+    mask_arg = f"{PRIOR_RUN_ID}/artifacts/rfi_rfifind.mask"
+    result = run_prepdata(
+        "input.fil", 10.0, mask_file=mask_arg,
+        backend=backend, settings=settings,
+    )
+    assert result.status == RunStatus.SUCCESS
+
+    argv = backend.calls[0].invocation.argv
+    expected_container_mask = f"/runs/{PRIOR_RUN_ID}/artifacts/rfi_rfifind.mask"
+    assert "-mask" in argv
+    assert expected_container_mask in argv
+    # The read-only /runs mount must be present so PRESTO can read the mask
+    # companion files alongside it.
+    runs_mounts = [
+        a for a in argv
+        if a.startswith("type=bind,") and "dst=/runs" in a and a.endswith(",readonly")
+    ]
+    assert len(runs_mounts) == 1
+
+    m = load_manifest(settings.runs_dir / result.run_id)
+    assert m.container_inputs["extra_input_0"] == expected_container_mask
+    assert m.inputs["mask_file"] == mask_arg
 
 
 @pytest.mark.parametrize("bad_dm", [-0.001, 10_001.0])

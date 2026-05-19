@@ -10,6 +10,7 @@ from presto_mcp.errors import PathSecurityError
 from presto_mcp.path_security import (
     create_run_dir,
     ensure_inside_root,
+    is_run_artifact_path,
     is_run_id,
     resolve_input_path,
 )
@@ -158,3 +159,24 @@ def test_is_run_id() -> None:
     assert not is_run_id("not-an-id")
     assert not is_run_id("20260516T143052Z-lowercase")
     assert not is_run_id("20260516T143052Z-K7QM3")  # too short
+
+
+def test_is_run_artifact_path_accepts_canonical_shape() -> None:
+    assert is_run_artifact_path("20260516T143052Z-K7QM3A/artifacts/rfi.mask")
+    assert is_run_artifact_path("20260516T143052Z-K7QM3A/artifacts/B0355_rfi_rfifind.mask")
+    assert is_run_artifact_path(
+        r"20260516T143052Z-K7QM3A\artifacts\rfi.mask"
+    )  # backslash normalized
+
+
+def test_is_run_artifact_path_rejects_other_shapes() -> None:
+    assert not is_run_artifact_path("")
+    assert not is_run_artifact_path("rfi.mask")
+    assert not is_run_artifact_path("sub/rfi.mask")
+    assert not is_run_artifact_path("20260516T143052Z-K7QM3A/rfi.mask")
+    assert not is_run_artifact_path("20260516T143052Z-K7QM3A/artifacts/")
+    assert not is_run_artifact_path(
+        "20260516T143052Z-K7QM3A/artifacts/sub/rfi.mask"
+    )
+    assert not is_run_artifact_path("/abs/20260516T143052Z-K7QM3A/artifacts/rfi.mask")
+    assert not is_run_artifact_path(None)  # type: ignore[arg-type]

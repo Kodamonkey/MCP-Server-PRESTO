@@ -32,7 +32,12 @@ from .models import (
     RunStatus,
     ToolRunResult,
 )
-from .path_security import create_run_dir, resolve_input_path, resolve_run_artifact
+from .path_security import (
+    create_run_dir,
+    is_run_artifact_path,
+    resolve_input_path,
+    resolve_run_artifact,
+)
 
 log = logging.getLogger("presto_mcp.executor")
 
@@ -50,6 +55,20 @@ class ExtraInput:
 
     path: str            # host-relative
     root: InputRoot = "data"
+
+
+def extra_input_for(path: str) -> ExtraInput:
+    """Build an :class:`ExtraInput` autodetecting the right root.
+
+    Picks ``root="runs"`` when ``path`` matches ``<run_id>/artifacts/<file>``
+    (e.g. an rfifind mask produced by a prior run), otherwise falls back to
+    ``root="data"``. Lets pipeline tools accept either kind of mask without
+    forcing callers to copy files between roots.
+    """
+    return ExtraInput(
+        path=path,
+        root="runs" if is_run_artifact_path(path) else "data",
+    )
 
 
 @dataclass(frozen=True)
@@ -449,4 +468,5 @@ __all__ = [
     "RunStatus",
     "ToolRunResult",
     "execute",
+    "extra_input_for",
 ]

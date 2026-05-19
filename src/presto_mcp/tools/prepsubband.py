@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..config import Settings, get_settings
 from ..docker_backend import BackendProtocol
-from ..executor import ExtraInput, RunSpec, execute
+from ..executor import ExtraInput, RunSpec, execute, extra_input_for
 from ..models import PrepsubbandResult, ToolRunResult
 from ..parsers import prepsubband_parser
 from ..policies import (
@@ -36,7 +36,12 @@ def run_prepsubband(
     settings: Settings | None = None,
     background: bool = False,
 ) -> ToolRunResult[PrepsubbandResult]:
-    """``prepsubband -lodm <low> -dmstep <step> -numdms <N> -nsub <S> -o <prefix> <input>``."""
+    """``prepsubband -lodm <low> -dmstep <step> -numdms <N> -nsub <S> -o <prefix> <input>``.
+
+    Optional ``mask_file`` can be either a path relative to ``DATA_DIR`` or a
+    ``<run_id>/artifacts/<file>.mask`` produced by a prior ``rfifind`` run; the
+    root is detected from the path shape.
+    """
     s = settings or get_settings()
     lo = check_dm(dm_low)
     step = check_dm_step(dm_step)
@@ -53,7 +58,7 @@ def run_prepsubband(
         "output_prefix": prefix,
     }
     if mask_file:
-        extras = (ExtraInput(path=mask_file, root="data"),)
+        extras = (extra_input_for(mask_file),)
         inputs_extra["mask_file"] = mask_file
 
     def argv_builder(

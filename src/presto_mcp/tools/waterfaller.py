@@ -17,7 +17,7 @@ from pathlib import Path
 
 from ..config import Settings, get_settings
 from ..docker_backend import BackendProtocol
-from ..executor import ExtraInput, RunSpec, execute
+from ..executor import ExtraInput, RunSpec, execute, extra_input_for
 from ..models import ToolRunResult, WaterfallerResult
 from ..parsers import waterfaller_parser
 from ..policies import check_dm, check_waterfall_duration, check_waterfall_start
@@ -49,8 +49,9 @@ def run_waterfaller(
 ) -> ToolRunResult[WaterfallerResult]:
     """``waterfaller.py -T <t0> -t <dur> -d <dm> [--mask --maskfile <m>] <raw>``.
 
-    ``input_file`` is relative to ``DATA_DIR``. Optional ``mask_file`` is also
-    relative to ``DATA_DIR``.
+    ``input_file`` is relative to ``DATA_DIR``. Optional ``mask_file`` can be
+    either relative to ``DATA_DIR`` or a ``<run_id>/artifacts/<file>.mask``
+    produced by a prior ``rfifind`` run; the root is detected from the path.
     """
     s = settings or get_settings()
     t0 = check_waterfall_start(start_s)
@@ -59,7 +60,7 @@ def run_waterfaller(
 
     extras_list: list[ExtraInput] = []
     if mask_file is not None:
-        extras_list.append(ExtraInput(path=mask_file, root="data"))
+        extras_list.append(extra_input_for(mask_file))
     extras = tuple(extras_list)
 
     def argv_builder(

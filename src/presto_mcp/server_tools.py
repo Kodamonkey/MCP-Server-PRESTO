@@ -225,7 +225,9 @@ def register_tools(
         description=(
             "Run PRESTO 'prepdata' inside Docker to dedisperse one DM trial into a "
             "single-precision .dat time series (+ .inf header). Optionally accepts "
-            "a mask_file (relative to DATA_DIR). Input path is relative to DATA_DIR."
+            "a mask_file (either relative to DATA_DIR or a "
+            "'<run_id>/artifacts/<file>.mask' from a prior rfifind run). "
+            "Input path is relative to DATA_DIR."
         ),
     )
     async def presto_prepdata(
@@ -245,7 +247,12 @@ def register_tools(
             str | None,
             Field(
                 default=None,
-                description="Optional rfifind .mask file relative to DATA_DIR.",
+                description=(
+                    "Optional rfifind .mask file. Either a path relative to "
+                    "DATA_DIR or '<run_id>/artifacts/<file>.mask' from a prior "
+                    "rfifind run (companion .inf/.bytemask/.rfi/.stats files "
+                    "must live next to it; both layouts work)."
+                ),
             ),
         ] = None,
         background: Annotated[
@@ -330,7 +337,13 @@ def register_tools(
         ] = None,
         mask_file: Annotated[
             str | None,
-            Field(default=None, description="Optional rfifind .mask file relative to DATA_DIR."),
+            Field(
+                default=None,
+                description=(
+                    "Optional rfifind .mask file. Either relative to DATA_DIR "
+                    "or '<run_id>/artifacts/<file>.mask' from a prior rfifind run."
+                ),
+            ),
         ] = None,
         background: Annotated[
             bool,
@@ -653,8 +666,9 @@ def register_tools(
             "Run PRESTO 'make_spd.py' inside Docker to produce single-pulse "
             "diagnostic .spd files. Reads a rrattrap groups.txt + raw "
             "filterbank/PSRFITS + .singlepulse files (and optional rfifind .mask). "
-            "raw_file and mask_file are relative to DATA_DIR; groups_file and "
-            "singlepulse_files are '<run_id>/artifacts/...' relative to RUNS_DIR."
+            "raw_file is relative to DATA_DIR; groups_file and singlepulse_files "
+            "are '<run_id>/artifacts/...' relative to RUNS_DIR; mask_file may be "
+            "either form."
         ),
     )
     async def presto_make_spd(
@@ -672,7 +686,13 @@ def register_tools(
         ],
         mask_file: Annotated[
             str | None,
-            Field(default=None, description="Optional rfifind .mask file relative to DATA_DIR."),
+            Field(
+                default=None,
+                description=(
+                    "Optional rfifind .mask file. Either relative to DATA_DIR "
+                    "or '<run_id>/artifacts/<file>.mask' from a prior rfifind run."
+                ),
+            ),
         ] = None,
         output_prefix: Annotated[
             str | None,
@@ -749,8 +769,9 @@ def register_tools(
             "Run PRESTO 'waterfaller.py' inside Docker to render a dynamic-spectrum "
             "(waterfall) image around a candidate (start_s, duration_s, dm) for a "
             "raw filterbank/PSRFITS file under DATA_DIR. Optional mask_file is "
-            "also relative to DATA_DIR. Requires the PRESTO image's PNG-tagged "
-            "variant to write the figure into the working directory."
+            "either relative to DATA_DIR or '<run_id>/artifacts/<file>.mask' from "
+            "a prior rfifind run. Requires the PRESTO image's PNG-tagged variant "
+            "to write the figure into the working directory."
         ),
     )
     async def presto_waterfaller(
@@ -772,7 +793,13 @@ def register_tools(
         ],
         mask_file: Annotated[
             str | None,
-            Field(default=None, description="Optional rfifind .mask file relative to DATA_DIR."),
+            Field(
+                default=None,
+                description=(
+                    "Optional rfifind .mask file. Either relative to DATA_DIR "
+                    "or '<run_id>/artifacts/<file>.mask' from a prior rfifind run."
+                ),
+            ),
         ] = None,
         nsub: Annotated[
             int | None,
