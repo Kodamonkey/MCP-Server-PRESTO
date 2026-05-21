@@ -78,7 +78,7 @@ If you need deeper control, you can add any of these variables to `.env`:
 | `PRESTO_NETWORK` | `none` | Keep isolated; change only for debugging. |
 | `PRESTO_SKIP_HEALTHCHECK` | `false` | Tests/debug only; do not use in production. |
 | `PRESTO_LOG_LEVEL` | `INFO` | Console/file verbosity (`DEBUG` for troubleshooting). |
-| `PRESTO_LOG_TO_FILE` | `true` | Mirror stderr logs to `server_sessions/<session_id>.log`. |
+| `PRESTO_LOG_TO_FILE` | `true` | Mirror stderr logs into `sessions/<session_id>.jsonl` (`kind=log` lines). |
 | `PRESTO_PYTHON_BIN` | *(auto)* | `python3` or `python` inside the image; empty = detect at startup. |
 | `PRESTO_EXPORT_CONSUMABLES` | `true` | Copy useful artifacts from each run into `PRESTO_OUTPUTS_DIR`. |
 | `PRESTO_EXPORT_CLASSES` | `final,pipeline` | `final` = plots/reports; `pipeline` = masks, `.singlepulse`, `.spd`, etc. |
@@ -285,19 +285,13 @@ All logs go to **stderr** (stdout stays JSON-RPC-only). Each line uses a short p
 | `[audit]` | Audit session open/close |
 | `[export]` | Consumable files copied to `outputs/` |
 
-When `PRESTO_LOG_TO_FILE=true` (default), the same lines are appended to:
+### Session log (JSONL)
 
-- `PRESTO_LOGS_DIR/server_sessions/<session_id>.log`
+One append-only file per server process:
 
-One file per server process (same `session_id` as the audit log below).
+- `PRESTO_LOGS_DIR/sessions/<session_id>.jsonl`
 
-### MCP audit log (JSONL)
-
-Structured, machine-readable audit trail:
-
-- `PRESTO_LOGS_DIR/mcp_audit_sessions/<session_id>.jsonl`
-
-Each tool call adds two JSON lines (`request` / `response`) with arguments, duration, `run_id`, and `status`. Use this for automated review; use `server_sessions/*.log` for human-readable timelines.
+When `PRESTO_LOG_TO_FILE=true` (default), stderr lines are mirrored as JSON objects with `"kind": "log"`, `"phase"`, `"level"`, and `"message"`. MCP tool calls add `"tool"` / `"phase"` / `"payload"` lines (`request` / `response` with arguments, duration, `run_id`, and `status`). Filter on `kind` or `tool` for automated review; read `message` for human timelines.
 
 ### Consumable exports (`outputs/`)
 

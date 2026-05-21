@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from presto_mcp.logging_setup import (
@@ -9,6 +10,7 @@ from presto_mcp.logging_setup import (
     phase_logger,
     unbind_session_log,
 )
+from presto_mcp.session_log import SESSION_DIRNAME, reset_state_for_tests
 
 
 def test_phase_formatter_uses_adapter_phase() -> None:
@@ -28,8 +30,9 @@ def test_phase_formatter_uses_adapter_phase() -> None:
     assert "health check passed" in formatted
 
 
-def test_bind_session_log_writes_file(tmp_path) -> None:
+def test_bind_session_log_writes_jsonl(tmp_path) -> None:
     configure_logging(log_to_file=True)
+    reset_state_for_tests()
     unbind_session_log()
     session_id = "20260101T120000Z-0001"
     path = bind_session_log(tmp_path, session_id)
@@ -39,6 +42,9 @@ def test_bind_session_log_writes_file(tmp_path) -> None:
     log.info("ready | image=test:tag")
 
     unbind_session_log()
-    text = path.read_text(encoding="utf-8")
-    assert "[server]" in text
-    assert "ready | image=test:tag" in text
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    log_rows = [row for row in rows if row.get("kind") == "log"]
+    assert any(row["phase"] == "server" for row in log_rows)
+    assert any("ready | image=test:tag" in row["message"] for row in log_rows)
+    assert path.parent.name == SESSION_DIRNAME
+    assert path.suffix == ".jsonl"

@@ -131,14 +131,12 @@ def main() -> None:
     session_id: str | None = None
     log.info("starting presto-mcp (profile=%s)", s.tool_profile)
     session_id = initialize_audit_session(s)
-    server_log = bind_session_log(s.logs_dir, session_id)
-    audit_file = s.logs_dir / "mcp_audit_sessions" / f"{session_id}.jsonl"
+    session_file = bind_session_log(s.logs_dir, session_id)
     log.info("ready | image=%s", s.image)
     log.info("ready | data=%s", s.data_dir)
     log.info("ready | tools profile=%s", s.tool_profile)
-    log.info("audit jsonl: %s", audit_file)
-    if server_log is not None:
-        log.info("server log: %s", server_log)
+    if session_file is not None:
+        log.info("session jsonl: %s", session_file)
     if sys.stdin.isatty():
         print(
             "\n"

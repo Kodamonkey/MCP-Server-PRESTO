@@ -1,7 +1,7 @@
-"""Minimal, phase-tagged logging for stderr and per-server-session files.
+"""Minimal, phase-tagged logging for stderr and unified session JSONL.
 
 Console (stderr): short timestamps, ``[phase] message`` — safe for MCP stdio.
-File: same lines under ``PRESTO_LOGS_DIR/server_sessions/<session_id>.log``.
+File (optional): same events as JSON lines in ``PRESTO_LOGS_DIR/sessions/<id>.jsonl``.
 """
 
 from __future__ import annotations
@@ -12,11 +12,12 @@ import sys
 from logging import LoggerAdapter
 from pathlib import Path
 
+from .session_log import open_session
+
 _CONSOLE_DATEFMT = "%H:%M:%S"
 _FILE_DATEFMT = "%Y-%m-%d %H:%M:%S"
 _CONSOLE_FORMAT = "%(asctime)s [%(phase)s] %(message)s"
 _FILE_FORMAT = "%(asctime)s [%(phase)s] %(message)s"
-_SESSION_DIRNAME = "server_sessions"
 
 _PHASE_BY_LOGGER: dict[str, str] = {
     "presto_mcp.server": "server",
@@ -29,7 +30,7 @@ _PHASE_BY_LOGGER: dict[str, str] = {
     "presto_mcp.consumable_exports": "export",
 }
 
-_file_handler: logging.FileHandler | None = None
+_file_handler: logging.Handler | None = None
 _session_log_path: Path | None = None
 
 
@@ -38,6 +39,31 @@ class _PhaseFormatter(logging.Formatter):
         if not hasattr(record, "phase"):
             record.phase = _PHASE_BY_LOGGER.get(record.name, "app")
         return super().format(record)
+
+
+class _JsonlSessionHandler(logging.Handler):
+    """Mirror log records into the active session JSONL as ``kind=log`` lines."""
+
+    def __init__(self, logs_dir: Path) -> None:
+        super().__init__()
+        self._logs_dir = logs_dir
+
+    def emit(self, record: logging.LogRecord) -> None:
+        from .session_log import append_entry
+
+        phase = getattr(record, "phase", _PHASE_BY_LOGGER.get(record.name, "app"))
+        try:
+            append_entry(
+                self._logs_dir,
+                {
+                    "kind": "log",
+                    "phase": phase,
+                    "level": record.levelname,
+                    "message": record.getMessage(),
+                },
+            )
+        except Exception:
+            self.handleError(record)
 
 
 def phase_logger(phase: str, name: str) -> LoggerAdapter:
@@ -69,12 +95,11 @@ def configure_logging(*, log_to_file: bool | None = None) -> None:
             "no",
         )
 
-    # File handler attaches in bind_session_log when log_to_file is true.
     root._presto_log_to_file = log_to_file  # type: ignore[attr-defined]
 
 
 def bind_session_log(logs_dir: Path, session_id: str) -> Path | None:
-    """Append human-readable logs for this server process to a session file."""
+    """Append human-readable logs into the unified session JSONL."""
     global _file_handler, _session_log_path
 
     root = logging.getLogger()
@@ -83,10 +108,9 @@ def bind_session_log(logs_dir: Path, session_id: str) -> Path | None:
 
     unbind_session_log()
     logs_dir.mkdir(parents=True, exist_ok=True)
-    path = logs_dir / _SESSION_DIRNAME / f"{session_id}.log"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _sid, path = open_session(logs_dir, session_id=session_id)
 
-    handler = logging.FileHandler(path, encoding="utf-8")
+    handler = _JsonlSessionHandler(logs_dir)
     handler.setFormatter(_PhaseFormatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT))
     logging.getLogger().addHandler(handler)
 
