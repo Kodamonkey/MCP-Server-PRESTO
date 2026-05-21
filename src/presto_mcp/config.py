@@ -10,14 +10,22 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import stat
-import subprocess
+import sys
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from .docker_runtime import (
+    DockerDaemonDiagnosis,
+    DockerInfoResult,
+    diagnose_docker_info_failure,
+    ensure_docker_daemon,
+    format_startup_failure_banner,
+    resolve_docker_bin,
+)
 
 log = logging.getLogger("presto_mcp.config")
 
@@ -47,6 +55,18 @@ def _env_path(name: str, default_rel: str) -> Path:
     return p
 
 
+def _env_bool_or_none(name: str) -> bool | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _default_auto_start_docker() -> bool:
+    """Windows/macOS: try to launch Docker Desktop when the daemon is down."""
+    return sys.platform in ("win32", "darwin")
+
+
 def _env_int_min(name: str, default: int, minimum: int) -> int:
     raw = os.environ.get(name)
     if raw is None:
@@ -74,6 +94,8 @@ class Settings:
     default_timeout_s: int
     network: str
     skip_healthcheck: bool
+    auto_start_docker: bool = False
+    auto_start_docker_timeout_s: int = 120
     max_concurrent_runs: int = 1
     tool_profile: str = "all"
 
@@ -97,6 +119,14 @@ def _load_from_env() -> Settings:
         default_timeout_s=int(os.environ.get("PRESTO_DEFAULT_TIMEOUT_SECONDS", "1800")),
         network=os.environ.get("PRESTO_NETWORK", "none"),
         skip_healthcheck=_env_bool("PRESTO_SKIP_HEALTHCHECK", False),
+        auto_start_docker=(
+            _auto
+            if (_auto := _env_bool_or_none("PRESTO_AUTO_START_DOCKER")) is not None
+            else _default_auto_start_docker()
+        ),
+        auto_start_docker_timeout_s=_env_int_min(
+            "PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS", 120, 15
+        ),
         max_concurrent_runs=_env_int_min("PRESTO_MAX_CONCURRENT_RUNS", 2, 1),
         tool_profile=os.environ.get("PRESTO_TOOL_PROFILE", "all").strip().lower(),
     )
@@ -143,6 +173,54 @@ def find_cloud_placeholder_files(data_dir: Path) -> list[Path]:
 class HealthCheckError(RuntimeError):
     """Startup health check failed; server must not boot."""
 
+    def __init__(
+        self,
+        summary: str,
+        *,
+        code: str = "HEALTH_CHECK_FAILED",
+        remediation: tuple[str, ...] = (),
+        detail: str | None = None,
+    ) -> None:
+        self.code = code
+        self.summary = summary
+        self.remediation = remediation
+        self.detail = detail
+        super().__init__(summary)
+
+    @classmethod
+    def from_docker_diagnosis(cls, diagnosis: DockerDaemonDiagnosis) -> HealthCheckError:
+        return cls(
+            diagnosis.summary,
+            code=diagnosis.code,
+            remediation=diagnosis.remediation,
+            detail=diagnosis.detail,
+        )
+
+    def docker_diagnosis(self) -> DockerDaemonDiagnosis | None:
+        if not self.remediation:
+            return None
+        return DockerDaemonDiagnosis(
+            code=self.code,
+            summary=self.summary,
+            remediation=self.remediation,
+            detail=self.detail,
+        )
+
+
+def format_health_check_failure(exc: HealthCheckError) -> str:
+    """User-visible banner for stderr (MCP Inspector / terminal)."""
+    diagnosis = exc.docker_diagnosis()
+    if diagnosis is not None:
+        return format_startup_failure_banner(diagnosis)
+    return format_startup_failure_banner(
+        DockerDaemonDiagnosis(
+            code=exc.code,
+            summary=exc.summary,
+            remediation=exc.remediation or (exc.summary,),
+            detail=exc.detail,
+        ),
+    )
+
 
 def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
     """Validate the environment before the server accepts connections.
@@ -158,8 +236,12 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
 
     if not s.data_dir.is_dir():
         raise HealthCheckError(
-            f"PRESTO_DATA_DIR does not exist: {s.data_dir}. "
-            f"Create it or set PRESTO_DATA_DIR to a valid path."
+            f"PRESTO_DATA_DIR does not exist: {s.data_dir}",
+            code="DATA_DIR_MISSING",
+            remediation=(
+                f"Create {s.data_dir} or set PRESTO_DATA_DIR to a valid path.",
+                "Re-run: uv run --directory . python -m presto_mcp.server",
+            ),
         )
 
     placeholders: list[Path] = []
@@ -190,41 +272,43 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
     if placeholders:
         names = ", ".join(p.name for p in placeholders)
         raise HealthCheckError(
-            f"Zero-byte data files detected (likely OneDrive cloud-only placeholders): "
-            f"{names}. In Windows Explorer, right-click data/ → 'Always keep on this "
-            f"device' and wait for sync to finish."
+            f"Zero-byte data files (likely OneDrive placeholders): {names}",
+            code="DATA_ONEDRIVE_PLACEHOLDER",
+            remediation=(
+                "In Windows Explorer, right-click data/ → 'Always keep on this device'.",
+                "Wait until files show a real size (not 0 bytes), then restart presto-mcp.",
+            ),
+            detail=names,
         )
 
     if cloud_placeholders:
         names = ", ".join(p.name for p in cloud_placeholders)
         raise HealthCheckError(
-            f"Cloud-only data files detected (OneDrive placeholders): {names}. "
-            f"In Windows Explorer, right-click data/ -> 'Always keep on this "
-            f"device' and wait for sync to finish."
+            f"Cloud-only data files (OneDrive placeholders): {names}",
+            code="DATA_ONEDRIVE_CLOUD_ONLY",
+            remediation=(
+                "In Windows Explorer, right-click data/ → 'Always keep on this device'.",
+                "Wait for sync to finish, then restart presto-mcp.",
+            ),
+            detail=names,
         )
 
-    docker = docker_bin or shutil.which("docker")
+    docker = resolve_docker_bin(docker_bin)
     if not docker:
-        raise HealthCheckError(
-            "docker CLI not found on PATH. Install Docker Desktop and ensure 'docker' is "
-            "callable from this shell."
+        raise HealthCheckError.from_docker_diagnosis(
+            diagnose_docker_info_failure(
+                DockerInfoResult(
+                    ok=False,
+                    returncode=-1,
+                    detail="docker CLI not found on PATH",
+                )
+            )
         )
 
-    try:
-        subprocess.run(
-            [docker, "info"],
-            check=True,
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
-            timeout=10,
-            shell=False,
-        )
-    except (
-        subprocess.CalledProcessError,
-        subprocess.TimeoutExpired,
-        FileNotFoundError,
-        OSError,
-    ) as e:
-        raise HealthCheckError(
-            f"`docker info` failed; Docker daemon may be unavailable: {e}"
-        ) from e
+    diagnosis = ensure_docker_daemon(
+        docker,
+        auto_start=s.auto_start_docker,
+        wait_timeout_s=s.auto_start_docker_timeout_s,
+    )
+    if diagnosis is not None:
+        raise HealthCheckError.from_docker_diagnosis(diagnosis)

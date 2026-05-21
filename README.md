@@ -60,7 +60,13 @@ From the repo root:
 uv run --directory . python -m presto_mcp.server
 ```
 
-You should see `presto-mcp starting` and the `data=...` path. Press Ctrl+C to stop. If startup fails, fix `.env` or Docker before continuing.
+You should see `presto-mcp starting` and the `data=...` path. Press Ctrl+C to stop. If startup fails, read the **banner on stderr** (also visible in the MCP Inspector terminal): it lists the error code, a short summary, and numbered remediation steps.
+
+**Common startup failure — `DOCKER_DAEMON_DOWN`:** Docker is installed but Docker Desktop is not running. On Windows/macOS the server can try to launch it automatically (`PRESTO_AUTO_START_DOCKER=true` by default; wait up to `PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS`). You can also start Docker Desktop manually, confirm `docker info` works, then restart presto-mcp.
+
+**Inspector “connects” but lists no tools:** the child process exited during the health check. Run the same `uv run ...` command in a terminal — do not rely on the Inspector UI alone.
+
+**Note:** PRESTO already runs inside ephemeral `docker run --rm` containers per tool call. Startup only ensures the Docker *engine* is available; it does not start a long-lived PRESTO container.
 
 ### 5. Test tools (MCP Inspector)
 

@@ -19,10 +19,18 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 
 from mcp.server.fastmcp import FastMCP
 
-from .config import Settings, ensure_runtime_dirs, get_settings, run_health_check
+from .config import (
+    HealthCheckError,
+    Settings,
+    ensure_runtime_dirs,
+    format_health_check_failure,
+    get_settings,
+    run_health_check,
+)
 from .docker_backend import BackendProtocol, DockerBackend
 from .server_prompts import register_prompts
 from .server_resources import (
@@ -114,7 +122,12 @@ def main() -> None:
     try:
         run_health_check(s)
     except Exception as e:  # noqa: BLE001
-        log.error("startup health check failed: %s", e)
+        if isinstance(e, HealthCheckError):
+            banner = format_health_check_failure(e)
+            print(banner, file=sys.stderr, flush=True)
+            log.error("startup health check failed [%s]: %s", e.code, e.summary)
+        else:
+            log.error("startup health check failed: %s", e)
         raise SystemExit(2) from e
 
     set_settings(s)

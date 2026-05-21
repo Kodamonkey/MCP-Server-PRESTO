@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..config import Settings, find_cloud_placeholder_files, get_settings
 from ..docker_backend import BackendProtocol
+from ..docker_runtime import diagnose_docker_info_failure, run_docker_info
 from ..models import (
     EnvironmentCheck,
     EnvironmentCheckStatus,
@@ -218,33 +219,21 @@ def _check_docker_cli() -> tuple[str | None, list[EnvironmentCheck]]:
 
 
 def _check_docker_daemon(docker: str) -> EnvironmentCheck:
-    try:
-        cp = subprocess.run(
-            [docker, "info"],
-            check=False,
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
-            timeout=_DOCKER_PROBE_TIMEOUT_S,
-            shell=False,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        return EnvironmentCheck(
-            name="docker.daemon",
-            status="ERROR",
-            message=f"`docker info` failed: {e}",
-            remediation="Start Docker Desktop / the docker daemon.",
-        )
-    if cp.returncode != 0:
-        stderr = (cp.stderr or b"").decode("utf-8", errors="replace").strip()
-        stdout = (cp.stdout or b"").decode("utf-8", errors="replace").strip()
-        detail = stderr or stdout or f"exit={cp.returncode}"
-        return EnvironmentCheck(
-            name="docker.daemon",
-            status="ERROR",
-            message=f"`docker info` failed: {detail}",
-            remediation="Start Docker Desktop / the docker daemon.",
-        )
-    return EnvironmentCheck(name="docker.daemon", status="OK", message="available")
+    result = run_docker_info(docker, timeout_s=_DOCKER_PROBE_TIMEOUT_S)
+    if result.ok:
+        return EnvironmentCheck(name="docker.daemon", status="OK", message="available")
+    diagnosis = diagnose_docker_info_failure(result)
+    remediation = (
+        "; ".join(diagnosis.remediation)
+        if len(diagnosis.remediation) == 1
+        else " | ".join(diagnosis.remediation[:2])
+    )
+    return EnvironmentCheck(
+        name="docker.daemon",
+        status="ERROR",
+        message=f"{diagnosis.summary} ({diagnosis.code})",
+        remediation=remediation,
+    )
 
 
 def _check_image(docker: str, image: str) -> EnvironmentCheck:
