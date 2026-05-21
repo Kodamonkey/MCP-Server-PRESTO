@@ -8,25 +8,25 @@ A typed, sandboxed [Model Context Protocol](https://modelcontextprotocol.io) ser
 
 ## Installation (canonical)
 
-Una sola forma de instalar, configurar y conectar clientes. Pensada para enseñar y para producción local.
+One consistent way to install, configure, and connect clients. Designed for onboarding and local production use.
 
-### Decisiones (no negociables)
+### Decisions (non-negotiable)
 
-| # | Decisión | Motivo |
+| # | Decision | Reason |
 |---|----------|--------|
-| 1 | **Toda la config en `<repo>/.env`** (copiar desde `.env.example`) | Un solo sitio; no duplicar `PRESTO_*` en JSON de Cursor/Claude |
-| 2 | **Un solo comando de arranque** | `uv run --directory <REPO> python -m presto_mcp.server` |
-| 3 | **`--directory <REPO>` siempre** | El cliente MCP no depende del `cwd`; carga el paquete y el `.env` del clone |
-| 4 | **Datos por defecto en `./data`** | Si están en otra carpeta, solo cambia `PRESTO_DATA_DIR` en `.env` |
-| 5 | **JSON del cliente = solo ruta al repo** | Sustituir `REPLACE_WITH_REPO_ROOT`; sin bloque `"env"` |
-| 6 | **El cliente lanza el servidor** | No hace falta dejar `uv run …` en una terminal para el uso diario |
+| 1 | **All config lives in `<repo>/.env`** (copy from `.env.example`) | Single source of truth; do not duplicate `PRESTO_*` in Cursor/Claude JSON |
+| 2 | **Single startup command** | `uv run --directory <REPO> python -m presto_mcp.server` |
+| 3 | **Always use `--directory <REPO>`** | MCP client does not depend on `cwd`; it loads the package and `.env` from the clone |
+| 4 | **Default data location is `./data`** | If data is elsewhere, only change `PRESTO_DATA_DIR` in `.env` |
+| 5 | **Client JSON = repo path only** | Replace `REPLACE_WITH_REPO_ROOT`; no `"env"` block |
+| 6 | **Client launches server** | You do not need to keep `uv run ...` open in a terminal for daily use |
 
-### 1. Requisitos
+### 1. Requirements
 
-- Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker en marcha
+- Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker running
 - Imagen: `docker pull alex88ridolfi/presto5:png`
 
-### 2. Clonar e instalar
+### 2. Clone and install
 
 ```bash
 git clone <your-fork-or-repo-url>
@@ -35,74 +35,74 @@ uv sync --extra dev
 docker pull alex88ridolfi/presto5:png
 ```
 
-### 3. Configurar (solo `.env`)
+### 3. Configure (only `.env`)
 
 ```bash
 cp .env.example .env   # Windows: copy .env.example .env
 ```
 
-Edita `.env` si hace falta:
+Edit `.env` if needed:
 
-- **`PRESTO_DATA_DIR`** — por defecto `./data` (archivos `.fil` / `.fits` dentro del repo).
-- Si tus observaciones están **fuera** del repo, pon la ruta absoluta aquí (única ruta “extra” habitual).
+- **`PRESTO_DATA_DIR`** — defaults to `./data` (`.fil` / `.fits` files inside the repo).
+- If your observations are **outside** the repo, set the absolute path here (typically the only extra path you need).
 
-El resto (`runs/`, CPUs, memoria, imagen Docker) puede quedarse en los valores por defecto.
+Everything else (`runs/`, CPUs, memory, Docker image) can stay at defaults.
 
-Pon los archivos de observación en `data/` (o en la carpeta que definas en `PRESTO_DATA_DIR`).
+Put observation files in `data/` (or in the directory you set in `PRESTO_DATA_DIR`).
 
-**Windows + OneDrive:** clic derecho en la carpeta de datos → *Mantener siempre en este dispositivo* (archivos de 0 bytes fallan el health check).
+**Windows + OneDrive:** right-click the data folder -> *Always keep on this device* (0-byte placeholders fail the health check).
 
-### 4. Comprobar que arranca
+### 4. Verify startup
 
-Desde la raíz del repo:
+From the repo root:
 
 ```bash
 uv run --directory . python -m presto_mcp.server
 ```
 
-Debes ver `presto-mcp starting` y la ruta de `data=…`. Ctrl+C para salir. Si falla, corrige `.env` o Docker antes de seguir.
+You should see `presto-mcp starting` and the `data=...` path. Press Ctrl+C to stop. If startup fails, fix `.env` or Docker before continuing.
 
-### 5. Probar herramientas (MCP Inspector)
+### 5. Test tools (MCP Inspector)
 
-Sin configurar Cursor ni Claude:
+Without configuring Cursor or Claude first:
 
 ```bash
 npx @modelcontextprotocol/inspector uv run --directory . python -m presto_mcp.server
 ```
 
-Abre la URL que imprime el Inspector. Prueba p. ej. `presto.validate_environment` y `presto.readfile` con un nombre de archivo bajo `data/`.
+Open the URL printed by Inspector. Try `presto.validate_environment` and `presto.readfile` with a filename under `data/`.
 
-### 6. Conectar Cursor o Claude Desktop
+### 6. Connect Cursor or Claude Desktop
 
-Copia la plantilla y sustituye **solo** `REPLACE_WITH_REPO_ROOT` por la ruta absoluta al clone (barras `\\` en JSON de Windows).
+Copy the template and replace **only** `REPLACE_WITH_REPO_ROOT` with the absolute clone path (use `\\` in Windows JSON).
 
 | Cliente | Plantilla | Destino |
 |---------|-----------|---------|
-| **Cursor** | [examples/mcp/cursor_mcp.example.json](examples/mcp/cursor_mcp.example.json) | `.cursor/mcp.json` en la raíz del repo |
-| **Claude Desktop** | [examples/mcp/claude_desktop_config.example.json](examples/mcp/claude_desktop_config.example.json) | Fusionar en `claude_desktop_config.json` del sistema |
+| **Cursor** | [examples/mcp/cursor_mcp.example.json](examples/mcp/cursor_mcp.example.json) | `.cursor/mcp.json` in the repo root |
+| **Claude Desktop** | [examples/mcp/claude_desktop_config.example.json](examples/mcp/claude_desktop_config.example.json) | Merge into the system `claude_desktop_config.json` |
 
-Activa el servidor **presto** (Cursor: Settings → MCP). Reinicia Claude Desktop por completo.
+Enable the **presto** server (Cursor: Settings -> MCP). Fully restart Claude Desktop.
 
-Detalle extra (ruta a `uv.exe`, venv): [examples/mcp/README.md](examples/mcp/README.md).
+Extra details (`uv.exe` path, venv option): [examples/mcp/README.md](examples/mcp/README.md).
 
-### 7. Usar con el LLM
+### 7. Use with the LLM
 
-Ejemplos de prompt:
+Prompt examples:
 
 - *“Run `presto.readfile` on `57762_12049_J0532+3305_000022.fil` and summarize the metadata.”*
 - *“Run `presto.rfifind` on that file with `time: 2.0`, then show the mask stats.”*
 
-Los nombres de archivo son **relativos a `PRESTO_DATA_DIR`** (sin rutas absolutas ni `..`). Las salidas van a `runs/<run_id>/artifacts/`.
+Filenames are **relative to `PRESTO_DATA_DIR`** (no absolute paths and no `..`). Outputs go to `runs/<run_id>/artifacts/`.
 
-Trabajos largos: `"background": true` y luego `presto.get_run_manifest` hasta `SUCCESS` / `FAILED` / `TIMEOUT`.
+For long jobs: set `"background": true` and poll with `presto.get_run_manifest` until `SUCCESS` / `FAILED` / `TIMEOUT`.
 
-### Qué comando usar cuándo
+### Which command to use when
 
-| Objetivo | Comando |
+| Goal | Command |
 |----------|---------|
-| Verificar instalación | `uv run --directory . python -m presto_mcp.server` |
-| Probar tools en el navegador | `npx @modelcontextprotocol/inspector uv run --directory . python -m presto_mcp.server` |
-| Uso con Cursor / Claude | El cliente ejecuta el mismo `uv run --directory <REPO> …` (plantilla JSON); **no** hace falta una terminal aparte |
+| Verify installation | `uv run --directory . python -m presto_mcp.server` |
+| Test tools in browser | `npx @modelcontextprotocol/inspector uv run --directory . python -m presto_mcp.server` |
+| Use with Cursor / Claude | Client runs the same `uv run --directory <REPO> ...` (JSON template); **no** extra terminal required |
 
 ---
 
