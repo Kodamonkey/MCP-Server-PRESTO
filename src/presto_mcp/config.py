@@ -75,6 +75,7 @@ class Settings:
     network: str
     skip_healthcheck: bool
     max_concurrent_runs: int = 1
+    tool_profile: str = "all"
 
     def with_overrides(self, **kwargs: object) -> Settings:
         """Return a copy with selected fields replaced (test helper)."""
@@ -97,6 +98,7 @@ def _load_from_env() -> Settings:
         network=os.environ.get("PRESTO_NETWORK", "none"),
         skip_healthcheck=_env_bool("PRESTO_SKIP_HEALTHCHECK", False),
         max_concurrent_runs=_env_int_min("PRESTO_MAX_CONCURRENT_RUNS", 2, 1),
+        tool_profile=os.environ.get("PRESTO_TOOL_PROFILE", "all").strip().lower(),
     )
 
 

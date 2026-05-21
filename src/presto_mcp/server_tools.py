@@ -7,6 +7,7 @@ FastMCP instance and passes it in so server.py remains the only FastMCP import.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
@@ -22,12 +23,14 @@ from .models import (
     DDplanResult,
     DownsampleFilterbankResult,
     FbTruncateResult,
+    FourierFoldResult,
     GetTOAsResult,
     InspectArtifactsResult,
     ListDataFilesResult,
     MakeSpdResult,
     MakeZaplistResult,
     Pfd2PngResult,
+    PfdZapResult,
     PlotSpdResult,
     PrepdataResult,
     PrepfoldResult,
@@ -53,6 +56,7 @@ from .models import (
     WeightsToIgnorechanResult,
     ZapbirdsResult,
 )
+from .tool_metadata import PROFILE_NAMES, resolve_profile
 from .tools import list_runs as list_runs_tool
 from .tools.accelsearch import run_accelsearch
 from .tools.binary_info import run_binary_info
@@ -61,11 +65,13 @@ from .tools.compile_candidate_report_pdf import run_compile_candidate_report_pdf
 from .tools.ddplan import run_ddplan
 from .tools.downsample_filterbank import run_downsample_filterbank
 from .tools.fb_truncate import run_fb_truncate
+from .tools.fourier_fold import run_fourier_fold
 from .tools.get_toas import run_get_toas
 from .tools.list_data_files import run_list_data_files
 from .tools.make_spd import run_make_spd
 from .tools.makezaplist import run_makezaplist
 from .tools.pfd2png import run_pfd2png
+from .tools.pfdzap import run_pfdzap
 from .tools.plot_spd import run_plot_spd
 from .tools.prepdata import run_prepdata
 from .tools.prepfold import run_prepfold
@@ -89,16 +95,57 @@ from .tools.waterfaller import run_waterfaller
 from .tools.weights_to_ignorechan import run_weights_to_ignorechan
 from .tools.zapbirds import run_zapbirds
 
+log = logging.getLogger("presto_mcp.server_tools")
+
+# Shared annotation for the repeated `background` flag (previously duplicated
+# inline in ~34 tool signatures).
+_BackgroundParam = Annotated[
+    bool,
+    Field(
+        default=False,
+        description=(
+            "If true, return immediately with status RUNNING; poll "
+            "presto.get_run_manifest until SUCCESS/FAILED/TIMEOUT."
+        ),
+    ),
+]
+
 
 def register_tools(
     mcp: Any,
     _backend_for_tools: Callable[[], BackendProtocol],
     _settings_for_tools: Callable[[], Settings],
 ) -> None:
+    # --- Profile-aware registration ------------------------------------------------
+    # PRESTO_TOOL_PROFILE selects which tools are exposed. The `tool` wrapper
+    # registers a tool with FastMCP only when the active profile includes it;
+    # otherwise the decorated function is left defined-but-unregistered.
+    try:
+        _profile = _settings_for_tools().tool_profile
+    except Exception:  # noqa: BLE001 - never fail registration over config
+        _profile = "all"
+    if _profile not in PROFILE_NAMES:
+        log.warning(
+            "unknown PRESTO_TOOL_PROFILE %r; exposing all tools (valid: %s)",
+            _profile,
+            ", ".join(PROFILE_NAMES),
+        )
+    _enabled = resolve_profile(_profile)
+
+    def tool(*, name: str, description: str):
+        """Register a tool with FastMCP only if the active profile includes it."""
+        if name.removeprefix("presto.") in _enabled:
+            return mcp.tool(name=name, description=description)
+
+        def _skip(fn):  # tool filtered out by PRESTO_TOOL_PROFILE
+            return fn
+
+        return _skip
+
     # --- Tools ---------------------------------------------------------------------
 
 
-    @mcp.tool(
+    @tool(
         name="presto.readfile",
         description=(
             "Run PRESTO 'readfile' inside Docker on a file under data/. Returns "
@@ -115,16 +162,7 @@ def register_tools(
             str,
             Field(description="Path to a PRESTO-readable file relative to DATA_DIR."),
         ],
-        background: Annotated[
-            bool,
-            Field(
-                default=False,
-                description=(
-                    "If true, return immediately with status RUNNING and poll "
-                    "presto.get_run_manifest until SUCCESS/FAILED/TIMEOUT."
-                ),
-            ),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[ReadfileMetadata]:
         return await asyncio.to_thread(
             run_readfile,
@@ -135,7 +173,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.rfifind",
         description=(
             "Run PRESTO 'rfifind' inside Docker. Generates .mask/.rfi/.stats "
@@ -162,13 +200,7 @@ def register_tools(
                 ),
             ),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(
-                default=False,
-                description="Return immediately with RUNNING; poll get_run_manifest.",
-            ),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[RfifindSummary]:
         return await asyncio.to_thread(
             run_rfifind,
@@ -181,7 +213,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.prepfold",
         description=(
             "Run PRESTO 'prepfold' inside Docker in Mode A (period + DM). Generates "
@@ -210,13 +242,7 @@ def register_tools(
                 description="Filename prefix for outputs. Defaults to 'fold'.",
             ),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(
-                default=False,
-                description="Return immediately with RUNNING; poll get_run_manifest.",
-            ),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[PrepfoldResult]:
         return await asyncio.to_thread(
             run_prepfold,
@@ -230,7 +256,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.prepdata",
         description=(
             "Run PRESTO 'prepdata' inside Docker to dedisperse one DM trial into a "
@@ -265,10 +291,7 @@ def register_tools(
                 ),
             ),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[PrepdataResult]:
         return await asyncio.to_thread(
             run_prepdata,
@@ -282,7 +305,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.ddplan",
         description=(
             "Run PRESTO 'DDplan.py' inside Docker to compute an optimal DM-trial "
@@ -341,10 +364,7 @@ def register_tools(
             str | None,
             Field(default=None, description="Output filename prefix. Defaults to 'ddplan'."),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[DDplanResult]:
         return await asyncio.to_thread(
             run_ddplan,
@@ -364,7 +384,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.prepsubband",
         description=(
             "Run PRESTO 'prepsubband' inside Docker to dedisperse a range of DM "
@@ -395,10 +415,7 @@ def register_tools(
                 ),
             ),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[PrepsubbandResult]:
         return await asyncio.to_thread(
             run_prepsubband,
@@ -415,7 +432,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.realfft",
         description=(
             "Run PRESTO 'realfft' inside Docker to FFT a dedispersed .dat into a "
@@ -429,10 +446,7 @@ def register_tools(
             str,
             Field(description="<run_id>/artifacts/<file>.dat relative to RUNS_DIR."),
         ],
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[RealfftResult]:
         return await asyncio.to_thread(
             run_realfft,
@@ -443,7 +457,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.accelsearch",
         description=(
             "Run PRESTO 'accelsearch' inside Docker for Fourier / acceleration "
@@ -505,10 +519,7 @@ def register_tools(
                 description="Cap the parsed top_candidates list (does not change the search).",
             ),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[AccelsearchResult]:
         return await asyncio.to_thread(
             run_accelsearch,
@@ -525,7 +536,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.single_pulse_search",
         description=(
             "Run PRESTO 'single_pulse_search.py' inside Docker over one or more "
@@ -547,10 +558,7 @@ def register_tools(
             float,
             Field(default=0.1, gt=0.0, le=10.0, description="Max boxcar width in seconds."),
         ] = 0.1,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[SinglePulseSearchResult]:
         return await asyncio.to_thread(
             run_single_pulse_search,
@@ -563,7 +571,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.sifting",
         description=(
             "Run PRESTO 'ACCEL_sift.py' inside Docker over many ACCEL_* candidate "
@@ -589,10 +597,7 @@ def register_tools(
             float,
             Field(default=4.0, ge=1.0, le=50.0, description="Min sigma for survivors."),
         ] = 4.0,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[SiftingResult]:
         return await asyncio.to_thread(
             run_sifting,
@@ -606,7 +611,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.get_toas",
         description=(
             "Run PRESTO 'get_TOAs.py' inside Docker to compute Times of Arrival "
@@ -648,10 +653,7 @@ def register_tools(
                 ),
             ),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[GetTOAsResult]:
         return await asyncio.to_thread(
             run_get_toas,
@@ -666,7 +668,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.zapbirds",
         description=(
             "Run PRESTO 'zapbirds' inside Docker to apply a zaplist to a .fft "
@@ -694,10 +696,7 @@ def register_tools(
             int | None,
             Field(default=None, ge=0, description="Override -N nfft."),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[ZapbirdsResult]:
         return await asyncio.to_thread(
             run_zapbirds,
@@ -711,7 +710,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.rrattrap",
         description=(
             "[experimental / image-dependent] Run PRESTO 'rrattrap.py' inside Docker "
@@ -740,10 +739,7 @@ def register_tools(
             bool,
             Field(default=False, description="Pass --use-DMplan."),
         ] = False,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[RrattrapResult]:
         return await asyncio.to_thread(
             run_rrattrap,
@@ -757,7 +753,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.make_spd",
         description=(
             "Run PRESTO 'make_spd.py' inside Docker to produce single-pulse "
@@ -799,10 +795,7 @@ def register_tools(
             bool,
             Field(default=False, description="Pass --mask to enable masking (requires mask_file)."),
         ] = False,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[MakeSpdResult]:
         return await asyncio.to_thread(
             run_make_spd,
@@ -818,7 +811,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.plot_spd",
         description=(
             "Run PRESTO 'plot_spd.py' inside Docker to render a PNG/PS diagnostic "
@@ -843,10 +836,7 @@ def register_tools(
             bool,
             Field(default=False, description="Pass --just-waterfall."),
         ] = False,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[PlotSpdResult]:
         return await asyncio.to_thread(
             run_plot_spd,
@@ -860,7 +850,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.waterfaller",
         description=(
             "Run PRESTO 'waterfaller.py' inside Docker to render a dynamic-spectrum "
@@ -910,10 +900,7 @@ def register_tools(
             int | None,
             Field(default=None, ge=1, description="Downsample factor (--downsamp)."),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[WaterfallerResult]:
         return await asyncio.to_thread(
             run_waterfaller,
@@ -931,7 +918,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.list_runs",
         description=(
             "List recent PRESTO runs from this server's runs/ directory (newest first). "
@@ -950,7 +937,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.get_run_manifest",
         description="Return the full manifest JSON for a given run_id.",
     )
@@ -966,7 +953,7 @@ def register_tools(
     # --- Additional PRESTO tools (data prep / RFI / fold QC / advanced) -----------
 
 
-    @mcp.tool(
+    @tool(
         name="presto.psrfits2fil",
         description=(
             "Run PRESTO 'psrfits2fil.py' inside Docker to convert PSRFITS search-"
@@ -983,10 +970,7 @@ def register_tools(
             str | None,
             Field(default=None, description="Output filename prefix. Defaults to 'fil'."),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[Psrfits2FilResult]:
         return await asyncio.to_thread(
             run_psrfits2fil,
@@ -998,7 +982,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.downsample_filterbank",
         description=(
             "Run PRESTO 'downsample_filterbank.py' inside Docker to produce a "
@@ -1015,10 +999,7 @@ def register_tools(
             int,
             Field(ge=2, le=1024, description="Downsample factor (2..1024)."),
         ],
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[DownsampleFilterbankResult]:
         return await asyncio.to_thread(
             run_downsample_filterbank,
@@ -1030,7 +1011,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.fb_truncate",
         description=(
             "Run PRESTO 'fb_truncate.py' inside Docker to cut a sample window from "
@@ -1055,10 +1036,7 @@ def register_tools(
             str | None,
             Field(default=None, description="Output filename prefix. Defaults to 'trunc'."),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[FbTruncateResult]:
         return await asyncio.to_thread(
             run_fb_truncate,
@@ -1072,7 +1050,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.rfifind_stats",
         description=(
             "Run PRESTO 'rfifind_stats.py' inside Docker to summarize a prior "
@@ -1093,10 +1071,7 @@ def register_tools(
                 description="Optional <run_id>/artifacts/<file>.mask relative to RUNS_DIR.",
             ),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[RfifindStatsResult]:
         return await asyncio.to_thread(
             run_rfifind_stats,
@@ -1108,7 +1083,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.pfd2png",
         description=(
             "[experimental] Run PRESTO 'pfd2png.sh' inside Docker to render a "
@@ -1122,10 +1097,7 @@ def register_tools(
             str,
             Field(description="<run_id>/artifacts/<file>.pfd relative to RUNS_DIR."),
         ],
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[Pfd2PngResult]:
         return await asyncio.to_thread(
             run_pfd2png,
@@ -1135,7 +1107,7 @@ def register_tools(
             background=background,
         )
 
-    @mcp.tool(
+    @tool(
         name="presto.makezaplist",
         description=(
             "[experimental] Run PRESTO 'makezaplist.py' inside Docker to build a "
@@ -1149,10 +1121,7 @@ def register_tools(
             str,
             Field(description="Input file (typically .birds) relative to DATA_DIR."),
         ],
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[MakeZaplistResult]:
         return await asyncio.to_thread(
             run_makezaplist,
@@ -1163,7 +1132,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.weights_to_ignorechan",
         description=(
             "[experimental] Run PRESTO 'weights_to_ignorechan.py' inside Docker "
@@ -1181,10 +1150,7 @@ def register_tools(
             float | None,
             Field(default=None, ge=0.0, le=1.0, description="Optional weight threshold."),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[WeightsToIgnorechanResult]:
         return await asyncio.to_thread(
             run_weights_to_ignorechan,
@@ -1195,7 +1161,7 @@ def register_tools(
             background=background,
         )
 
-    @mcp.tool(
+    @tool(
         name="presto.sum_profiles",
         description=(
             "[experimental] Run PRESTO 'sum_profiles.py' inside Docker to combine "
@@ -1212,10 +1178,7 @@ def register_tools(
                 max_length=4096,
             ),
         ],
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[SumProfilesResult]:
         return await asyncio.to_thread(
             run_sum_profiles,
@@ -1226,7 +1189,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.search_bin",
         description=(
             "[advanced] Run PRESTO 'search_bin' inside Docker for phase-modulation "
@@ -1248,10 +1211,7 @@ def register_tools(
             float | None,
             Field(default=None, gt=0.0, description="Optional upper frequency bound (Hz)."),
         ] = None,
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[SearchBinResult]:
         return await asyncio.to_thread(
             run_search_bin,
@@ -1264,7 +1224,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.stacksearch",
         description=(
             "[experimental / image-dependent] Run PRESTO 'stacksearch.py' inside "
@@ -1285,10 +1245,7 @@ def register_tools(
                 max_length=256,
             ),
         ],
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[StackSearchResult]:
         return await asyncio.to_thread(
             run_stacksearch,
@@ -1299,7 +1256,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.simple_zapbirds",
         description=(
             "[experimental / image-dependent] Run PRESTO 'simple_zapbirds.py' "
@@ -1326,10 +1283,7 @@ def register_tools(
                 ),
             ),
         ],
-        background: Annotated[
-            bool,
-            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
-        ] = False,
+        background: _BackgroundParam = False,
     ) -> ToolRunResult[SimpleZapbirdsResult]:
         return await asyncio.to_thread(
             run_simple_zapbirds,
@@ -1341,7 +1295,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.compare_periods",
         description=(
             "Utility tool (no Docker): cross-check a candidate spin period "
@@ -1394,7 +1348,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.binary_info",
         description=(
             "Utility tool (no Docker): summarise the orbital parameters of a "
@@ -1426,7 +1380,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.compile_candidate_report_pdf",
         description=(
             "Utility tool (no Docker): bundle PNG/JPG plot artifacts from one or "
@@ -1485,10 +1439,116 @@ def register_tools(
         )
 
 
+    @tool(
+        name="presto.pfdzap",
+        description=(
+            "[experimental] Run PRESTO 'pfdzap.py' inside Docker to apply strict "
+            "interval/channel zapping to a .pfd. zap_commands are strict "
+            "'<low>:<high>' integer tokens (max 512); arbitrary shell input is "
+            "rejected. The source .pfd is copied into the new run's artifacts/ "
+            "and zapped there. pfd_file is '<run_id>/artifacts/<file>.pfd' "
+            "relative to RUNS_DIR. Verify availability with "
+            "presto.validate_environment first."
+        ),
+    )
+    async def presto_pfdzap(
+        pfd_file: Annotated[
+            str,
+            Field(description="<run_id>/artifacts/<file>.pfd relative to RUNS_DIR."),
+        ],
+        zap_commands: Annotated[
+            list[str],
+            Field(
+                description="Strict '<low>:<high>' integer zap tokens.",
+                min_length=1,
+                max_length=512,
+            ),
+        ],
+        output_prefix: Annotated[
+            str | None,
+            Field(default=None, description="Output filename prefix. Defaults to 'pfdzap'."),
+        ] = None,
+        background: _BackgroundParam = False,
+    ) -> ToolRunResult[PfdZapResult]:
+        return await asyncio.to_thread(
+            run_pfdzap,
+            pfd_file,
+            backend=_backend_for_tools(),
+            zap_commands=zap_commands,
+            output_prefix=output_prefix,
+            settings=_settings_for_tools(),
+            background=background,
+        )
+
+
+    @tool(
+        name="presto.fourier_fold",
+        description=(
+            "[experimental] Run PRESTO 'fourier_fold.py' inside Docker to fold a "
+            ".fft at a known candidate from its complex amplitudes (no full "
+            "temporal fold). Provide exactly one of period_seconds or "
+            "frequency_hz; dm is optional. fft_file is "
+            "'<run_id>/artifacts/<file>.fft' relative to RUNS_DIR (from a prior "
+            "realfft run). Verify availability with presto.validate_environment "
+            "first."
+        ),
+    )
+    async def presto_fourier_fold(
+        fft_file: Annotated[
+            str,
+            Field(description="<run_id>/artifacts/<file>.fft relative to RUNS_DIR."),
+        ],
+        period_seconds: Annotated[
+            float | None,
+            Field(
+                default=None,
+                gt=0.0,
+                le=60.0,
+                description=(
+                    "Candidate spin period in seconds. Provide exactly one of "
+                    "period_seconds or frequency_hz."
+                ),
+            ),
+        ] = None,
+        frequency_hz: Annotated[
+            float | None,
+            Field(
+                default=None,
+                gt=0.0,
+                le=1.0e9,
+                description=(
+                    "Candidate spin frequency in Hz. Provide exactly one of "
+                    "period_seconds or frequency_hz."
+                ),
+            ),
+        ] = None,
+        dm: Annotated[
+            float | None,
+            Field(
+                default=None,
+                ge=0.0,
+                le=10_000.0,
+                description="Optional dispersion measure (pc cm^-3).",
+            ),
+        ] = None,
+        background: _BackgroundParam = False,
+    ) -> ToolRunResult[FourierFoldResult]:
+        return await asyncio.to_thread(
+            run_fourier_fold,
+            fft_file,
+            backend=_backend_for_tools(),
+            period_seconds=period_seconds,
+            frequency_hz=frequency_hz,
+            dm=dm,
+            settings=_settings_for_tools(),
+            background=background,
+        )
+
+
     # --- Utility tools (no PRESTO execution) --------------------------------------
 
 
-    @mcp.tool(
+    @tool(
         name="presto.list_data_files",
         description=(
             "List files available under PRESTO_DATA_DIR (no Docker, no PRESTO). "
@@ -1521,7 +1581,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.validate_environment",
         description=(
             "Structured local-environment diagnostic. Checks settings, data/runs/"
@@ -1570,7 +1630,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.summarize_run",
         description=(
             "Structured summary of one existing run: status, duration, exit_code, "
@@ -1588,7 +1648,7 @@ def register_tools(
         )
 
 
-    @mcp.tool(
+    @tool(
         name="presto.inspect_artifacts",
         description=(
             "Per-artifact index for one run: name, size, mtime, classified type, "

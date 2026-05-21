@@ -48,6 +48,9 @@ _HELP_MIN_CHARS = 40  # below this, a `-h` probe is treated as "binary absent"
 # Each entry maps a tool name to (required binaries, required python modules).
 # Tools whose binary lives off PATH (e.g. ACCEL_sift.py under examplescripts)
 # are intentionally omitted — a `which` probe would be misleading for them.
+# Utility tools that never invoke Docker (compare_periods, binary_info,
+# list_data_files, summarize_run, ...) are also omitted: probing the PRESTO
+# image for them would report a spurious ERROR for tools that work offline.
 _TOOL_DEPS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "readfile": (("readfile",), ()),
     "rfifind": (("rfifind",), ()),
@@ -74,8 +77,8 @@ _TOOL_DEPS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "search_bin": (("search_bin",), ()),
     "stacksearch": (("stacksearch.py",), ()),
     "simple_zapbirds": (("simple_zapbirds.py",), ()),
-    "compare_periods": (("compare_periods.py",), ("presto.parfile",)),
-    "binary_info": (("binary_info.py",), ("presto.parfile",)),
+    "pfdzap": (("pfdzap.py",), ()),
+    "fourier_fold": (("fourier_fold.py",), ()),
 }
 
 

@@ -143,8 +143,10 @@ Trabajos largos: `"background": true` y luego `presto.get_run_manifest` hasta `S
 | `presto.makezaplist` *(experimental)* | Build `.zaplist` from `.birds`             |
 | **Fold QC (new)**            |                                                     |
 | `presto.pfd2png` *(experimental)* | `.pfd` → PNG/PS (image-dependent)              |
+| `presto.pfdzap` *(experimental)* | Strict interval/channel zapping of a `.pfd`     |
 | **Advanced (new)**           |                                                     |
 | `presto.sum_profiles` *(experimental)* | Combine multiple `.bestprof` / `.prof`     |
+| `presto.fourier_fold` *(experimental)* | Fold a `.fft` at a known candidate         |
 | `presto.search_bin` *(advanced)* | Phase-modulation / sideband search for binaries |
 | `presto.stacksearch` *(experimental / image-dependent)* | Stack search over many `.fft` |
 | `presto.simple_zapbirds` *(experimental / image-dependent)* | Zap birdies from a `.fft` (on a staged copy) |
@@ -157,6 +159,26 @@ Trabajos largos: `"background": true` y luego `presto.get_run_manifest` hasta `S
 **Tool status taxonomy.** `stable` · `experimental` (awaiting image
 verification) · `image-dependent` (correctness depends on image contents,
 readiness-gated) · `advanced` (wide parameter space) · `utility` (no Docker).
+
+### Tool profiles
+
+`PRESTO_TOOL_PROFILE` (in `.env`) selects which tools the server exposes, so an
+LLM agent chooses from a smaller, task-focused catalog instead of all 38 tools
+at once.
+
+| Profile | Tools exposed |
+|---------|---------------|
+| `all` (default) | Every tool. |
+| `core` | Triage + reflection + `readfile`. |
+| `rfi_prep` | Core + data-prep + RFI tools. |
+| `periodic` | Core + the periodic / acceleration search pipeline. |
+| `single_pulse` | Core + the single-pulse search pipeline. |
+| `review_qc` | Core + candidate-review / known-pulsar tools. |
+| `advanced` | Core + advanced / experimental tools. |
+
+Every non-`all` profile includes the core triage/reflection tools, so
+`presto.get_run_manifest` (needed for `background` polling) is always
+available. An unknown value falls back to `all`.
 
 ### Runtime compatibility
 
