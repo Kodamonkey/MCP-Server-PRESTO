@@ -24,7 +24,7 @@ One consistent way to install, configure, and connect clients. Designed for onbo
 ### 1. Requirements
 
 - Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker running
-- Imagen: `docker pull alex88ridolfi/presto5:png`
+- Image: `docker pull alex88ridolfi/presto5:png`
 
 ### 2. Clone and install
 
@@ -76,8 +76,8 @@ Open the URL printed by Inspector. Try `presto.validate_environment` and `presto
 
 Copy the template and replace **only** `REPLACE_WITH_REPO_ROOT` with the absolute clone path (use `\\` in Windows JSON).
 
-| Cliente | Plantilla | Destino |
-|---------|-----------|---------|
+| Client | Template | Destination |
+|--------|----------|-------------|
 | **Cursor** | [examples/mcp/cursor_mcp.example.json](examples/mcp/cursor_mcp.example.json) | `.cursor/mcp.json` in the repo root |
 | **Claude Desktop** | [examples/mcp/claude_desktop_config.example.json](examples/mcp/claude_desktop_config.example.json) | Merge into the system `claude_desktop_config.json` |
 
@@ -108,13 +108,21 @@ For long jobs: set `"background": true` and poll with `presto.get_run_manifest` 
 
 ## MCP tools
 
+The server registers **38** `presto.*` tools. Utility tools (no Docker) are listed first; the rest invoke PRESTO inside the configured image.
 
 | Tool                         | Purpose                                             |
 | ---------------------------- | --------------------------------------------------- |
-| **Inspection**               |                                                     |
+| **Triage & utilities**       |                                                     |
+| `presto.validate_environment` | Docker/image checks + optional per-tool readiness  |
+| `presto.list_data_files`     | Index files under `PRESTO_DATA_DIR`                 |
 | `presto.readfile`            | Parse filterbank / PSRFITS header metadata          |
 | `presto.list_runs`           | List recent runs (newest first)                     |
 | `presto.get_run_manifest`    | Full manifest for one `run_id`                      |
+| `presto.summarize_run`       | Structured run summary + `next_suggested_tools`     |
+| `presto.inspect_artifacts`   | Per-artifact index with resource URIs               |
+| `presto.compare_periods` *(utility)* | Cross-check period vs `.par` ephemerides   |
+| `presto.binary_info` *(utility)* | Orbital summary from a binary `.par`          |
+| `presto.compile_candidate_report_pdf` *(utility)* | Bundle run plots into one PDF |
 | **RFI & prep**               |                                                     |
 | `presto.rfifind`             | RFI search → `.mask`, `.rfi`, `.stats`, …           |
 | `presto.prepdata`            | Dedisperse one DM → `.dat` + `.inf`                 |
@@ -133,28 +141,23 @@ For long jobs: set `"background": true` and poll with `presto.get_run_manifest` 
 | `presto.make_spd`            | Build single-pulse diagnostic `.spd`                |
 | `presto.plot_spd`            | Render SPD plot (PNG/PS)                            |
 | `presto.waterfaller`         | Dynamic-spectrum (waterfall) PNG around a candidate |
-| **Data prep (new)**          |                                                     |
+| **Data prep**                |                                                     |
 | `presto.psrfits2fil`         | PSRFITS → SIGPROC `.fil`                            |
 | `presto.downsample_filterbank` | Factor-downsample a `.fil` (debug / fast iter)    |
 | `presto.fb_truncate`         | Cut a sample window from a `.fil`                   |
-| **RFI (new)**                |                                                     |
+| **RFI**                      |                                                     |
 | `presto.rfifind_stats`       | Structured `bad_channels` / `bad_intervals` summary |
 | `presto.weights_to_ignorechan` *(experimental)* | `.weights`/`.mask` → ignorechan list |
 | `presto.makezaplist` *(experimental)* | Build `.zaplist` from `.birds`             |
-| **Fold QC (new)**            |                                                     |
+| **Fold QC**                  |                                                     |
 | `presto.pfd2png` *(experimental)* | `.pfd` → PNG/PS (image-dependent)              |
 | `presto.pfdzap` *(experimental)* | Strict interval/channel zapping of a `.pfd`     |
-| **Advanced (new)**           |                                                     |
+| **Advanced**                 |                                                     |
 | `presto.sum_profiles` *(experimental)* | Combine multiple `.bestprof` / `.prof`     |
 | `presto.fourier_fold` *(experimental)* | Fold a `.fft` at a known candidate         |
 | `presto.search_bin` *(advanced)* | Phase-modulation / sideband search for binaries |
 | `presto.stacksearch` *(experimental / image-dependent)* | Stack search over many `.fft` |
 | `presto.simple_zapbirds` *(experimental / image-dependent)* | Zap birdies from a `.fft` (on a staged copy) |
-| **Known-pulsar & review (new)** |                                                  |
-| `presto.compare_periods` *(utility)* | Cross-check a candidate period vs `.par` ephemerides |
-| `presto.binary_info` *(utility)* | Orbital summary + Doppler range from a binary `.par` |
-| `presto.compile_candidate_report_pdf` *(utility)* | Bundle run plot artifacts into one PDF |
-
 
 **Tool status taxonomy.** `stable` · `experimental` (awaiting image
 verification) · `image-dependent` (correctness depends on image contents,
@@ -168,15 +171,15 @@ at once.
 
 | Profile | Tools exposed |
 |---------|---------------|
-| `all` (default) | Every tool. |
-| `core` | Triage + reflection + `readfile`. |
+| `all` (default) | All 38 tools. |
+| `core` | Core set only (7 tools): `validate_environment`, `list_data_files`, `readfile`, `list_runs`, `get_run_manifest`, `summarize_run`, `inspect_artifacts`. |
 | `rfi_prep` | Core + data-prep + RFI tools. |
-| `periodic` | Core + the periodic / acceleration search pipeline. |
-| `single_pulse` | Core + the single-pulse search pipeline. |
+| `periodic` | Core + periodic / acceleration search pipeline. |
+| `single_pulse` | Core + single-pulse search pipeline. |
 | `review_qc` | Core + candidate-review / known-pulsar tools. |
 | `advanced` | Core + advanced / experimental tools. |
 
-Every non-`all` profile includes the core triage/reflection tools, so
+Every non-`all` profile includes the **core** set above, so
 `presto.get_run_manifest` (needed for `background` polling) is always
 available. An unknown value falls back to `all`.
 
@@ -206,33 +209,26 @@ you at `presto.validate_environment`. See
 
 ### MCP resources
 
-
-| URI                                           | Contents                                                   |
-| --------------------------------------------- | ---------------------------------------------------------- |
-| `presto://runs/{run_id}/manifest`             | `manifest.json`                                            |
-| `presto://runs/{run_id}/stdout`               | PRESTO stdout                                              |
-| `presto://runs/{run_id}/stderr`               | PRESTO stderr                                              |
+| URI | Contents |
+| --- | --- |
+| `presto://data` | JSON index of `PRESTO_DATA_DIR` |
+| `presto://runs` | JSON index of recent runs |
+| `presto://runs/{run_id}/manifest` | `manifest.json` |
+| `presto://runs/{run_id}/stdout` | PRESTO stdout |
+| `presto://runs/{run_id}/stderr` | PRESTO stderr |
+| `presto://runs/{run_id}/summary` | `RunStructuredSummary` JSON |
+| `presto://runs/{run_id}/artifacts` | Artifact index (no file contents) |
 | `presto://runs/{run_id}/artifacts/{filename}` | One artifact (text inline; large/binary → JSON descriptor) |
 
+Full reference: [RESOURCES.md](./docs/RESOURCES.md).
 
----
-
-## Prerequisites
-
-- **Python 3.11+**
-- **[uv](https://github.com/astral-sh/uv)**
-- **Docker** running on the host
-- Image: `docker pull alex88ridolfi/presto5:png`
+**Docker sanity check** (optional, after install):
 
 ```bash
 docker run --rm alex88ridolfi/presto5:png which readfile rfifind prepfold
 ```
 
-Startup health checks call `docker info`, not only `docker --version`; Docker
-Desktop / daemon must be running. `presto.validate_environment` reports CLI,
-daemon, and image checks separately.
-
-On Windows with OneDrive: ensure `data/` files are **“Always keep on this device”** (0-byte placeholders fail the startup check).
+Startup health checks call `docker info`, not only `docker --version`; the daemon must be running. `presto.validate_environment` reports CLI, daemon, and image checks separately.
 
 ---
 
@@ -271,39 +267,18 @@ runs/20260517T145912Z-OE2YWN/
 
 ---
 
-## Utilities, resources and prompts
+## Utilities and prompts
 
-Beyond the PRESTO-binary tools, the server exposes utility tools, navigation resources, and MCP prompts.
+Utility-tool parameters and examples: [TOOLS.md](./docs/TOOLS.md).
 
-**Utility tools** (no Docker, no PRESTO execution) — see [TOOLS.md](./docs/TOOLS.md):
-
-```text
-presto.validate_environment        # per-check report + per-tool readiness
-presto.list_data_files             # index files under PRESTO_DATA_DIR
-presto.summarize_run               # structured per-run summary + next_suggested_tools
-presto.inspect_artifacts           # per-artifact index with resource URIs
-presto.compare_periods             # candidate period vs .par ephemerides
-presto.binary_info                 # orbital summary from a binary .par
-presto.compile_candidate_report_pdf  # bundle run plots into one review PDF
-```
-
-Quick check from Inspector:
+Quick Inspector checks:
 
 ```text
 presto.validate_environment(include_tool_readiness=true)
 presto.list_data_files(limit=20, extensions=[".fil",".fits"])
 ```
 
-**Navigation resources** — see [RESOURCES.md](./docs/RESOURCES.md):
-
-```text
-presto://data                              # JSON index of DATA_DIR
-presto://runs                              # JSON index of recent runs
-presto://runs/{run_id}/summary             # RunStructuredSummary JSON
-presto://runs/{run_id}/artifacts           # ArtifactSummary list (no contents)
-```
-
-**Prompts** — see [PROMPTS.md](./docs/PROMPTS.md). Guidance prompts appear automatically in MCP Inspector and any client that surfaces prompts. **Prompts are guidance — the MCP server does not orchestrate or auto-execute.**
+**Prompts** (12 guidance templates, no auto-execution): [PROMPTS.md](./docs/PROMPTS.md). They appear in MCP Inspector and any client that surfaces prompts.
 
 **Separation of responsibilities.** The MCP layer ships atomic, sandboxed capabilities (tools), navigable state (resources), and reusable guidance (prompts). Stateful / adaptive orchestration (looping over candidates, branching on results, retries with parameter tweaks) belongs to a future LangGraph (or equivalent) layer above this MCP — not inside it.
 
@@ -324,9 +299,9 @@ Details: [ARCHITECTURE.md](./docs/ARCHITECTURE.md). Agent conventions: [AGENTS.m
 ## Limits & known limitations
 
 - **Stdout parsers only** for structured fields; binary products (`.mask`, `.pfd`, PNGs) are artifacts/resources, not decoded server-side.
-- `**prepfold` Mode A** — known period + DM; accel-cand folding is not wired yet.
+- **`prepfold` Mode A** — known period + DM; accel-cand folding is not wired yet.
 - **STDIO only** — no HTTP transport.
-- `**list_runs`** walks `runs/*/manifest.json` (fine for thousands of runs).
+- **`list_runs`** walks `runs/*/manifest.json` (fine for thousands of runs).
 - Stdout/stderr are still captured in memory before writing logs; diagnostics returned to clients are bounded, full logs remain in run resources.
 - **Image-dependent tools** (`rrattrap`, `stacksearch`, `simple_zapbirds`, `accelsearch -wmax`) only work when the configured PRESTO image provides the routine — check `presto.validate_environment(include_tool_readiness=true)`. See [RUNTIME_COMPATIBILITY.md](./docs/RUNTIME_COMPATIBILITY.md).
 - `presto.binary_info` `make_plot` is not supported (it is a no-Docker utility tool); orbital plots come from `presto.prepfold` / `presto.pfd2png`.
@@ -339,19 +314,27 @@ anti-bloat rule). Release history — [CHANGELOG.md](./CHANGELOG.md).
 
 ## Project layout
 
-
-| Path                               | Role                                                     |
-| ---------------------------------- | -------------------------------------------------------- |
-| `src/presto_mcp/server.py`         | FastMCP entrypoint                                       |
-| `src/presto_mcp/server_tools.py`   | MCP tool registration                                    |
-| `src/presto_mcp/server_resources.py` | MCP resource registration                              |
-| `src/presto_mcp/server_prompts.py` | MCP prompt registration                                  |
-| `src/presto_mcp/docker_backend.py` | Docker argv + subprocess                                 |
-| `src/presto_mcp/path_security.py`  | Path guards                                              |
-| `src/presto_mcp/executor.py`       | Run orchestration                                        |
-| `src/presto_mcp/tools/`            | One module per PRESTO tool                               |
-| `examples/mcp/`                    | Cursor / Claude Desktop config templates                 |
-| `data/`                            | Observation inputs (read-only, never committed if large) |
+| Path | Role |
+| --- | --- |
+| `pyproject.toml` / `uv.lock` | Dependencies and reproducible lockfile (`uv sync`) |
+| `.env.example` | Template for all `PRESTO_*` settings |
+| `AGENTS.md` | Canonical instructions for coding agents |
+| `CONTRIBUTING.md` | Contribution rules and anti-bloat policy |
+| `docs/` | Architecture, tools, prompts, resources, runtime compatibility |
+| `src/presto_mcp/server.py` | FastMCP entrypoint (stdio) |
+| `src/presto_mcp/server_tools.py` | MCP tool registration (38 tools) |
+| `src/presto_mcp/server_resources.py` | MCP resource registration |
+| `src/presto_mcp/server_prompts.py` | MCP prompt registration (12 prompts) |
+| `src/presto_mcp/tool_metadata.py` | Tool profiles (`PRESTO_TOOL_PROFILE`) |
+| `src/presto_mcp/docker_backend.py` | Docker argv + subprocess |
+| `src/presto_mcp/path_security.py` | Path guards |
+| `src/presto_mcp/executor.py` | Run orchestration |
+| `src/presto_mcp/tools/` | One module per tool |
+| `tests/` | Unit, integration, and e2e tests |
+| `scripts/runtime_compat_report.py` | Manual image compatibility report (CI workflow) |
+| `examples/mcp/` | Cursor / Claude Desktop JSON templates |
+| `data/` | Observation inputs (read-only; often not committed) |
+| `runs/` | Per-invocation manifests, logs, artifacts (runtime) |
 
 
 ---
