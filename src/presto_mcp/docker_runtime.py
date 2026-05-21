@@ -7,7 +7,6 @@ Desktop on Windows/macOS). It does not keep a long-lived PRESTO container runnin
 
 from __future__ import annotations
 
-import logging
 import os
 import shutil
 import subprocess
@@ -16,9 +15,15 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-log = logging.getLogger("presto_mcp.docker_runtime")
+from .logging_setup import phase_logger
+
+log = phase_logger("docker", "presto_mcp.docker_runtime")
 
 _DOCKER_INFO_TIMEOUT_S = 10
+_DOCKER_IMAGE_INSPECT_TIMEOUT_S = 15
+_PYTHON_DETECT_TIMEOUT_S = 15
+_CONTAINER_PYTHON_CANDIDATES = ("python3", "python")
+_DEFAULT_IMAGE_PULL_TIMEOUT_S = 900
 _DEFAULT_AUTO_START_TIMEOUT_S = 120
 _POLL_INTERVAL_S = 2.0
 
@@ -74,6 +79,180 @@ def run_docker_info(docker_bin: str, *, timeout_s: int = _DOCKER_INFO_TIMEOUT_S)
     stdout = (cp.stdout or b"").decode("utf-8", errors="replace").strip()
     detail = stderr or stdout or None
     return DockerInfoResult(ok=cp.returncode == 0, returncode=cp.returncode, detail=detail)
+
+
+def run_docker_image_inspect(
+    docker_bin: str,
+    image: str,
+    *,
+    timeout_s: int = _DOCKER_IMAGE_INSPECT_TIMEOUT_S,
+) -> DockerInfoResult:
+    """Run ``docker image inspect <image>``. Never raises."""
+    try:
+        cp = subprocess.run(
+            [docker_bin, "image", "inspect", image],
+            check=False,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout_s,
+            shell=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return DockerInfoResult(ok=False, returncode=-1, detail=str(e))
+    stderr = (cp.stderr or b"").decode("utf-8", errors="replace").strip()
+    stdout = (cp.stdout or b"").decode("utf-8", errors="replace").strip()
+    detail = stderr or stdout or None
+    return DockerInfoResult(ok=cp.returncode == 0, returncode=cp.returncode, detail=detail)
+
+
+def _binary_on_path_in_image(
+    docker_bin: str,
+    image: str,
+    binary: str,
+    *,
+    timeout_s: int = _PYTHON_DETECT_TIMEOUT_S,
+) -> bool:
+    """True when ``which <binary>`` succeeds inside a one-off container."""
+    try:
+        cp = subprocess.run(
+            [docker_bin, "run", "--rm", "--network", "none", image, "which", binary],
+            check=False,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout_s,
+            shell=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+    return cp.returncode == 0
+
+
+def detect_container_python(
+    docker_bin: str,
+    image: str,
+    *,
+    candidates: tuple[str, ...] = _CONTAINER_PYTHON_CANDIDATES,
+) -> str:
+    """Pick the first Python shim available in ``image`` (``python3`` before ``python``)."""
+    for name in candidates:
+        if _binary_on_path_in_image(docker_bin, image, name):
+            return name
+    log.warning(
+        "no %s in image %s; defaulting to python3",
+        " or ".join(candidates),
+        image,
+    )
+    return "python3"
+
+
+def resolve_container_python(
+    docker_bin: str,
+    image: str,
+    explicit: str,
+) -> str:
+    """Return ``explicit`` when set (must exist in image), else auto-detect."""
+    choice = explicit.strip()
+    if choice:
+        if not _binary_on_path_in_image(docker_bin, image, choice):
+            raise ValueError(
+                f"PRESTO_PYTHON_BIN={choice!r} is not on PATH inside image {image!r}"
+            )
+        return choice
+    return detect_container_python(docker_bin, image)
+
+
+def run_docker_pull(
+    docker_bin: str,
+    image: str,
+    *,
+    timeout_s: int = _DEFAULT_IMAGE_PULL_TIMEOUT_S,
+) -> DockerInfoResult:
+    """Run ``docker pull <image>``. Never raises. Streams pull output to stderr."""
+    log.info("pulling image (may take several minutes): %s", image)
+    try:
+        cp = subprocess.run(
+            [docker_bin, "pull", image],
+            check=False,
+            capture_output=False,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout_s,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired:
+        return DockerInfoResult(
+            ok=False,
+            returncode=-1,
+            detail=f"`docker pull {image}` timed out after {timeout_s}s",
+        )
+    except (FileNotFoundError, OSError) as e:
+        return DockerInfoResult(ok=False, returncode=-1, detail=str(e))
+    if cp.returncode == 0:
+        log.info("pull completed: %s", image)
+        return DockerInfoResult(ok=True, returncode=0)
+    return DockerInfoResult(
+        ok=False,
+        returncode=cp.returncode,
+        detail=f"`docker pull {image}` failed with exit={cp.returncode}",
+    )
+
+
+def diagnose_docker_image_failure(
+    image: str,
+    result: DockerInfoResult,
+    *,
+    pull_attempted: bool = False,
+) -> DockerDaemonDiagnosis:
+    """Map a missing/failed image probe or pull to an actionable diagnosis."""
+    detail = (result.detail or "").strip()
+    if pull_attempted:
+        return DockerDaemonDiagnosis(
+            code="DOCKER_IMAGE_PULL_FAILED",
+            summary=f"Failed to pull PRESTO image {image!r}.",
+            remediation=(
+                f"Run manually: docker pull {image}",
+                "Check network access and image name/tag in PRESTO_IMAGE.",
+                "Increase PRESTO_PULL_IMAGE_TIMEOUT_SECONDS if the image is large.",
+                "Restart presto-mcp after the pull succeeds.",
+            ),
+            detail=detail or None,
+        )
+    return DockerDaemonDiagnosis(
+        code="DOCKER_IMAGE_MISSING",
+        summary=f"PRESTO image {image!r} is not available locally.",
+        remediation=(
+            f"Run: docker pull {image}",
+            "Or set PRESTO_PULL_IMAGE_ON_START=true so presto-mcp pulls on startup.",
+            "Verify PRESTO_IMAGE in .env, then restart presto-mcp.",
+        ),
+        detail=detail or None,
+    )
+
+
+def ensure_presto_image(
+    docker_bin: str,
+    image: str,
+    *,
+    pull_if_missing: bool,
+    pull_timeout_s: int = _DEFAULT_IMAGE_PULL_TIMEOUT_S,
+) -> DockerDaemonDiagnosis | None:
+    """Return None when ``image`` is present locally; pull first when configured."""
+    inspect = run_docker_image_inspect(docker_bin, image)
+    if inspect.ok:
+        log.info("image present: %s", image)
+        return None
+
+    if not pull_if_missing:
+        return diagnose_docker_image_failure(image, inspect)
+
+    pull = run_docker_pull(docker_bin, image, timeout_s=pull_timeout_s)
+    if not pull.ok:
+        return diagnose_docker_image_failure(image, pull, pull_attempted=True)
+
+    inspect = run_docker_image_inspect(docker_bin, image)
+    if inspect.ok:
+        log.info("image ready after pull: %s", image)
+        return None
+    return diagnose_docker_image_failure(image, inspect, pull_attempted=True)
 
 
 def diagnose_docker_info_failure(
@@ -276,6 +455,7 @@ def ensure_docker_daemon(
     """Return None if daemon is healthy; otherwise a structured diagnosis."""
     first = run_docker_info(docker_bin)
     if first.ok:
+        log.info("daemon ready")
         return None
 
     auto_start_attempted = False
@@ -292,6 +472,7 @@ def ensure_docker_daemon(
         )
 
     if first.ok:
+        log.info("daemon ready after auto-start")
         return None
     return diagnose_docker_info_failure(first, auto_start_attempted=auto_start_attempted)
 
@@ -299,11 +480,17 @@ def ensure_docker_daemon(
 __all__ = [
     "DockerDaemonDiagnosis",
     "DockerInfoResult",
+    "diagnose_docker_image_failure",
     "diagnose_docker_info_failure",
     "ensure_docker_daemon",
+    "detect_container_python",
+    "ensure_presto_image",
     "format_startup_failure_banner",
+    "resolve_container_python",
     "launch_docker_desktop",
     "resolve_docker_bin",
+    "run_docker_image_inspect",
     "run_docker_info",
+    "run_docker_pull",
     "wait_for_docker_daemon",
 ]

@@ -6,7 +6,7 @@ Replaces the real backend in unit/integration tests. Honors the
 Behaviors:
 
 * Returns canned stdout/stderr/exit_code keyed by tool-name OR by a custom hook.
-* Capability probes (``which X``, ``python3 -c "import ..."``, ``X -h``) collide
+* Capability probes (``which X``, ``python -c "import ..."``, ``X -h``) collide
   under plain tool-name keying, so they are matched first against
   ``probe_responses`` using a composite key: ``which:<name>`` / ``module:<name>``
   / ``help:<name>``.
@@ -38,7 +38,7 @@ def probe_key(post_image_argv: tuple[str, ...]) -> str | None:
         return f"help:{post_image_argv[0]}"
     if (
         len(post_image_argv) >= 3
-        and post_image_argv[0] == "python3"
+        and post_image_argv[0] in ("python3", "python")
         and post_image_argv[1] == "-c"
     ):
         m = re.search(r"find_spec\(['\"]([^'\"]+)['\"]\)", post_image_argv[2])

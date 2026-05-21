@@ -17,12 +17,11 @@ sandboxing, and orchestration live in the modules under ``presto_mcp/``.
 
 from __future__ import annotations
 
-import logging
-import os
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
+from .audit_log import close_audit_session, initialize_audit_session
 from .config import (
     HealthCheckError,
     Settings,
@@ -32,6 +31,12 @@ from .config import (
     run_health_check,
 )
 from .docker_backend import BackendProtocol, DockerBackend
+from .logging_setup import (
+    bind_session_log,
+    configure_logging,
+    phase_logger,
+    unbind_session_log,
+)
 from .server_prompts import register_prompts
 from .server_resources import (
     _resource_artifact,
@@ -57,7 +62,7 @@ __all__ = [
     "_resource_stdout",
 ]
 
-log = logging.getLogger("presto_mcp.server")
+log = phase_logger("server", "presto_mcp.server")
 
 # --- App + backend------------------------------------------------
 
@@ -107,22 +112,9 @@ register_prompts(mcp)
 # --- Entrypoint ----------------------------------------------------------------
 
 
-def _configure_logging() -> None:
-    """Send all logs to stderr so stdout stays JSON-RPC-only for MCP stdio."""
-    level = os.environ.get("PRESTO_LOG_LEVEL", "INFO").upper()
-    root = logging.getLogger()
-    root.handlers.clear()
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    )
-    root.addHandler(handler)
-    root.setLevel(getattr(logging, level, logging.INFO))
-
-
 def main() -> None:
-    _configure_logging()
     s = get_settings()
+    configure_logging(log_to_file=s.log_to_file)
     ensure_runtime_dirs(s)
     try:
         run_health_check(s)
@@ -136,14 +128,23 @@ def main() -> None:
         raise SystemExit(2) from e
 
     set_settings(s)
-    log.info("presto-mcp ready (image=%s, data=%s)", s.image, s.data_dir)
+    session_id: str | None = None
+    log.info("starting presto-mcp (profile=%s)", s.tool_profile)
+    session_id = initialize_audit_session(s)
+    server_log = bind_session_log(s.logs_dir, session_id)
+    audit_file = s.logs_dir / "mcp_audit_sessions" / f"{session_id}.jsonl"
+    log.info("ready | image=%s", s.image)
+    log.info("ready | data=%s", s.data_dir)
+    log.info("ready | tools profile=%s", s.tool_profile)
+    log.info("audit jsonl: %s", audit_file)
+    if server_log is not None:
+        log.info("server log: %s", server_log)
     if sys.stdin.isatty():
         print(
             "\n"
-            "presto-mcp: RUNNING — ready for an MCP client.\n"
-            "  • Connect from your MCP client (Inspector, Claude Desktop, IDE, etc.).\n"
-            "  • This terminal is only the server process; do not type here (Enter breaks stdio).\n"
-            "  • Stop the server: Ctrl+C\n",
+            "presto-mcp: RUNNING — connect your MCP client now.\n"
+            "  Do not press Enter in this terminal (breaks stdio JSON-RPC).\n"
+            "  Ctrl+C to stop.\n",
             file=sys.stderr,
             flush=True,
         )
@@ -151,7 +152,12 @@ def main() -> None:
         mcp.run()
     except KeyboardInterrupt:
         # Normal shutdown path in local terminals; avoid noisy anyio traceback.
-        log.info("presto-mcp stopped by user (Ctrl+C)")
+        log.info("stopped (Ctrl+C)")
+    finally:
+        if session_id is not None:
+            close_audit_session(s)
+            log.info("session closed: %s", session_id)
+        unbind_session_log()
 
 
 if __name__ == "__main__":

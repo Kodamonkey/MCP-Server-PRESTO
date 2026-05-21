@@ -82,6 +82,17 @@ def test_python_module_present(settings: Settings) -> None:
     assert check.status == "OK"
 
 
+def test_python_module_probe_uses_configured_python(settings: Settings) -> None:
+    backend = FakeDockerBackend()
+    configured = settings.with_overrides(python_bin="python")
+    check = check_python_module_available(backend, configured, "presto")
+    assert check.status == "OK"
+
+    argv = backend.calls[0].invocation.argv
+    image_idx = argv.index(configured.image)
+    assert argv[image_idx + 1] == "python"
+
+
 def test_probe_timeout_is_unknown(settings: Settings) -> None:
     backend = FakeDockerBackend()
     backend.set_probe_response(

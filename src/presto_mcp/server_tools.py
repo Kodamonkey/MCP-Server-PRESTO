@@ -7,14 +7,17 @@ FastMCP instance and passes it in so server.py remains the only FastMCP import.
 from __future__ import annotations
 
 import asyncio
-import logging
+import functools
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from .audit_log import append_audit_entry
 from .config import Settings
 from .docker_backend import BackendProtocol
+from .logging_setup import phase_logger
 from .models import (
     AccelsearchResult,
     BinaryInfoResult,
@@ -95,7 +98,7 @@ from .tools.waterfaller import run_waterfaller
 from .tools.weights_to_ignorechan import run_weights_to_ignorechan
 from .tools.zapbirds import run_zapbirds
 
-log = logging.getLogger("presto_mcp.server_tools")
+log = phase_logger("mcp", "presto_mcp.server_tools")
 
 # Shared annotation for the repeated `background` flag (previously duplicated
 # inline in ~34 tool signatures).
@@ -132,10 +135,98 @@ def register_tools(
         )
     _enabled = resolve_profile(_profile)
 
+    def _audit_request(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+        request_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+        try:
+            append_audit_entry(
+                _settings_for_tools(),
+                tool_name=name,
+                phase="request",
+                payload={
+                    "request_id": request_id,
+                    "args_count": len(args),
+                    "kwargs": kwargs,
+                },
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug("audit request skipped for %s: %s", name, e)
+        log.info("→ %s", name)
+        return request_id
+
+    def _audit_response(
+        name: str,
+        request_id: str,
+        started_at: datetime,
+        *,
+        result: Any = None,
+        error: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "request_id": request_id,
+            "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000),
+        }
+        if error is not None:
+            payload["ok"] = False
+            payload["error"] = error
+        else:
+            payload["ok"] = True
+            if isinstance(result, ToolRunResult):
+                payload["run_id"] = result.run_id
+                payload["status"] = result.status
+                payload["manifest_uri"] = result.manifest_uri
+            else:
+                payload["result_type"] = type(result).__name__
+
+        try:
+            append_audit_entry(
+                _settings_for_tools(),
+                tool_name=name,
+                phase="response",
+                payload=payload,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug("audit response skipped for %s: %s", name, e)
+
+        duration_ms = payload["duration_ms"]
+        if error is not None:
+            log.warning("← %s FAILED %dms | %s", name, duration_ms, error)
+        elif isinstance(result, ToolRunResult):
+            log.info(
+                "← %s %s run_id=%s %dms",
+                name,
+                result.status,
+                result.run_id,
+                duration_ms,
+            )
+        else:
+            log.info("← %s ok %dms", name, duration_ms)
+
     def tool(*, name: str, description: str):
         """Register a tool with FastMCP only if the active profile includes it."""
         if name.removeprefix("presto.") in _enabled:
-            return mcp.tool(name=name, description=description)
+            base_tool = mcp.tool(name=name, description=description)
+
+            def _decorate(fn):
+                @functools.wraps(fn)
+                async def _wrapped(*args, **kwargs):
+                    started_at = datetime.now(UTC)
+                    request_id = _audit_request(name, args, kwargs)
+                    try:
+                        result = await fn(*args, **kwargs)
+                    except Exception as e:  # noqa: BLE001
+                        _audit_response(
+                            name,
+                            request_id,
+                            started_at,
+                            error=f"{type(e).__name__}: {e}",
+                        )
+                        raise
+                    _audit_response(name, request_id, started_at, result=result)
+                    return result
+
+                return base_tool(_wrapped)
+
+            return _decorate
 
         def _skip(fn):  # tool filtered out by PRESTO_TOOL_PROFILE
             return fn
@@ -857,7 +948,9 @@ def register_tools(
             "(waterfall) image around a candidate (start_s, duration_s, dm) for a "
             "raw filterbank/PSRFITS file under DATA_DIR. Optional mask_file is "
             "either relative to DATA_DIR or '<run_id>/artifacts/<file>.mask' from "
-            "a prior rfifind run. Requires the PRESTO image's PNG-tagged variant "
+            "a prior rfifind run. Optional colour_map forwards to PRESTO "
+            "--colour-map (matplotlib colormap name). "
+            "Requires the PRESTO image's PNG-tagged variant "
             "to write the figure into the working directory."
         ),
     )
@@ -888,6 +981,16 @@ def register_tools(
                 ),
             ),
         ] = None,
+        colour_map: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Optional matplotlib colormap name passed to PRESTO "
+                    "as --colour-map (examples: viridis, plasma, gist_yarg)."
+                ),
+            ),
+        ] = None,
         nsub: Annotated[
             int | None,
             Field(default=None, ge=1, le=4096, description="Number of subbands (-s)."),
@@ -910,6 +1013,7 @@ def register_tools(
             duration_s=duration_s,
             dm=dm,
             mask_file=mask_file,
+            colour_map=colour_map,
             nsub=nsub,
             nbins=nbins,
             downsamp=downsamp,

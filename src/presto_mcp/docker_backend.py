@@ -20,7 +20,9 @@ from typing import Protocol
 from .errors import DockerInvocationError
 from .models import BackendResult, DockerInvocation, RunStatus
 
-log = logging.getLogger("presto_mcp.docker_backend")
+from .logging_setup import phase_logger
+
+log = phase_logger("run", "presto_mcp.docker_backend")
 
 CONTAINER_DATA_MOUNT = "/data"
 CONTAINER_OUTPUT_MOUNT = "/outputs"
@@ -128,7 +130,7 @@ class DockerBackend:
         else:
             argv = [self.docker_bin, *invocation.argv[1:]]
 
-        log.info("docker run name=%s argv_len=%d", invocation.container_name, len(argv))
+        log.info("docker start %s", invocation.container_name)
 
         started = time.monotonic()
         try:
@@ -160,6 +162,19 @@ class DockerBackend:
         status = RunStatus.SUCCESS if cp.returncode == 0 else RunStatus.FAILED
         stdout = cp.stdout or ""
         stderr = cp.stderr or ""
+        if status == RunStatus.SUCCESS:
+            log.info(
+                "docker done %s exit=0 %.1fs",
+                invocation.container_name,
+                duration,
+            )
+        else:
+            log.warning(
+                "docker failed %s exit=%s %.1fs",
+                invocation.container_name,
+                cp.returncode,
+                duration,
+            )
         return BackendResult(
             status=status,
             exit_code=cp.returncode,

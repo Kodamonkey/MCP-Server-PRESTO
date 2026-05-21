@@ -41,6 +41,7 @@ def run_waterfaller(
     duration_s: float,
     dm: float,
     mask_file: str | None = None,
+    colour_map: str | None = None,
     nsub: int | None = None,
     nbins: int | None = None,
     downsamp: int | None = None,
@@ -62,12 +63,14 @@ def run_waterfaller(
     if mask_file is not None:
         extras_list.append(extra_input_for(mask_file))
     extras = tuple(extras_list)
+    container_python = s.resolved_python_bin()
+    cmap = (colour_map or "").strip() or None
 
     def argv_builder(
         container_input: str, extra_paths: tuple[str, ...], _run_dir: Path
     ) -> list[str]:
         argv = [
-            "python",
+            container_python,
             _CONTAINER_WRAPPER,
             "-T", str(t0),
             "-t", str(dur),
@@ -81,6 +84,8 @@ def run_waterfaller(
             argv += ["--downsamp", str(int(downsamp))]
         if mask_file is not None:
             argv += ["--mask", "--maskfile", extra_paths[0]]
+        if cmap is not None:
+            argv += ["--colour-map", cmap]
         argv.append(container_input)
         return argv
 
@@ -102,6 +107,8 @@ def run_waterfaller(
     }
     if mask_file is not None:
         inputs_extra["mask_file"] = mask_file
+    if cmap is not None:
+        inputs_extra["colour_map"] = cmap
     if nsub is not None:
         inputs_extra["nsub"] = str(int(nsub))
     if nbins is not None:

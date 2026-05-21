@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from presto_mcp.config import Settings
+from presto_mcp.config import Settings, set_resolved_container_python
 from presto_mcp.errors import PolicyViolationError
 from presto_mcp.manifest import load_manifest
 from presto_mcp.models import RunStatus
@@ -34,9 +34,10 @@ def settings(tmp_path: Path) -> Settings:
 
 
 def test_waterfaller_argv_and_png(settings: Settings) -> None:
+    set_resolved_container_python("python3")
     backend = FakeDockerBackend(
         responses={
-            "python": FakeResponse(
+            "python3": FakeResponse(
                 stdout="rendered\n",
                 status=RunStatus.SUCCESS,
                 artifacts={"waterfall.png": b"\x89PNG"},
@@ -47,7 +48,7 @@ def test_waterfaller_argv_and_png(settings: Settings) -> None:
         "raw.fil",
         backend=backend, settings=settings,
         start_s=12.5, duration_s=0.25, dm=56.78,
-        mask_file="rfi.mask", nsub=32, nbins=128, downsamp=2,
+        mask_file="rfi.mask", colour_map="viridis", nsub=32, nbins=128, downsamp=2,
     )
     assert result.status == RunStatus.SUCCESS
     assert result.result is not None
@@ -56,13 +57,15 @@ def test_waterfaller_argv_and_png(settings: Settings) -> None:
     assert result.result.dm == 56.78
 
     argv = backend.calls[0].invocation.argv
-    assert "python" in argv
+    image_idx = argv.index(settings.image)
+    assert argv[image_idx + 1] == "python3"
     assert "/outputs/artifacts/waterfaller_headless.py" in argv
     assert "-T" in argv and "12.5" in argv
     assert "-t" in argv and "0.25" in argv
     assert "-d" in argv and "56.78" in argv
     assert "--mask" in argv
     assert "--maskfile" in argv and "/data/rfi.mask" in argv
+    assert "--colour-map" in argv and "viridis" in argv
     assert "/data/raw.fil" in argv
     assert "--workdir" in argv and "/outputs/artifacts" in argv
 

@@ -8,7 +8,11 @@ from unittest.mock import patch
 import pytest
 
 from presto_mcp.config import HealthCheckError, Settings, run_health_check
-from presto_mcp.docker_runtime import DockerInfoResult, diagnose_docker_info_failure
+from presto_mcp.docker_runtime import (
+    DockerInfoResult,
+    diagnose_docker_image_failure,
+    diagnose_docker_info_failure,
+)
 
 
 def test_health_check_ignores_dotfiles_in_data_dir(tmp_path: Path) -> None:
@@ -30,7 +34,11 @@ def test_health_check_ignores_dotfiles_in_data_dir(tmp_path: Path) -> None:
         skip_healthcheck=False,
     )
 
-    with patch("presto_mcp.config.ensure_docker_daemon", return_value=None):
+    with (
+        patch("presto_mcp.config.ensure_docker_daemon", return_value=None),
+        patch("presto_mcp.config.ensure_presto_image", return_value=None),
+        patch("presto_mcp.config.resolve_container_python", return_value="python3"),
+    ):
         run_health_check(settings, docker_bin="docker")
 
 
@@ -82,6 +90,8 @@ def test_health_check_rejects_unavailable_docker_daemon(tmp_path: Path) -> None:
                 DockerInfoResult(ok=False, returncode=1, detail="daemon down")
             ),
         ),
+        patch("presto_mcp.config.ensure_presto_image", return_value=None),
+        patch("presto_mcp.config.resolve_container_python", return_value="python3"),
         pytest.raises(HealthCheckError, match="engine"),
     ):
         run_health_check(settings, docker_bin="docker")
@@ -106,16 +116,19 @@ def test_health_check_error_has_remediation_steps(tmp_path: Path) -> None:
         auto_start_docker=False,
     )
 
-    diagnosis = diagnose_docker_info_failure(
-        DockerInfoResult(ok=False, returncode=1, detail="down")
+    image_diagnosis = diagnose_docker_image_failure(
+        "alex88ridolfi/presto5:png",
+        DockerInfoResult(ok=False, returncode=1, detail="not found"),
     )
 
     with (
-        patch("presto_mcp.config.ensure_docker_daemon", return_value=diagnosis),
+        patch("presto_mcp.config.ensure_docker_daemon", return_value=None),
+        patch("presto_mcp.config.ensure_presto_image", return_value=image_diagnosis),
+        patch("presto_mcp.config.resolve_container_python", return_value="python3"),
         pytest.raises(HealthCheckError) as exc_info,
     ):
         run_health_check(settings, docker_bin="docker")
 
     err = exc_info.value
-    assert err.code == "DOCKER_DAEMON_DOWN"
+    assert err.code == "DOCKER_IMAGE_MISSING"
     assert err.remediation

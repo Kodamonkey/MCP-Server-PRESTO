@@ -39,7 +39,9 @@ from .path_security import (
     resolve_run_artifact,
 )
 
-log = logging.getLogger("presto_mcp.executor")
+from .logging_setup import phase_logger
+
+log = phase_logger("run", "presto_mcp.executor")
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -254,7 +256,7 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
     run_dir = prepared.run_dir
     invocation = prepared.invocation
 
-    log.info("execute tool=%s run_id=%s", spec.tool_name, run_id)
+    log.info("start %s run_id=%s", spec.tool_name, run_id)
     try:
         backend_result = _run_backend_with_limit(prepared)
     except Exception as e:  # noqa: BLE001
@@ -319,6 +321,13 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
         )
 
     manifest_uri, stdout_uri, stderr_uri, artifact_uris = _result_uris(run_id, artifacts)
+    log.info(
+        "done %s run_id=%s status=%s %.1fs",
+        spec.tool_name,
+        run_id,
+        manifest.status,
+        backend_result.duration_s,
+    )
     return ToolRunResult[T](
         run_id=run_id,
         status=manifest.status,

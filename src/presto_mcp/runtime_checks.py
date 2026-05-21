@@ -7,7 +7,7 @@ their internal Python modules (confirmed: ``rrattrap.py`` exists but
 readiness data instead of confusing tracebacks.
 
 Probes are lightweight one-off Docker commands only — ``which <binary>``,
-``python3 -c "import ..."``, ``<binary> -h``. They never run real PRESTO work.
+``<python> -c "import ..."``, ``<binary> -h``. They never run real PRESTO work.
 They reuse the proven invocation path (:func:`build_invocation` +
 ``backend.run``) so there is no new subprocess surface and no change to
 ``BackendProtocol``.
@@ -203,7 +203,7 @@ def check_python_module_available(
     timeout_s: int = _HELP_TIMEOUT_S,
     force_refresh: bool = False,
 ) -> RuntimeCheck:
-    """Probe ``python3 -c "find_spec(<module>)"``. Cached per (image, module)."""
+    """Probe ``<python> -c "find_spec(<module>)"``. Cached per (image, module)."""
     key = (settings.image, f"module.{module}")
     if not force_refresh:
         cached = _cache_get(_CHECK_CACHE, key)
@@ -214,8 +214,9 @@ def check_python_module_available(
         "import importlib.util as u; "
         f"raise SystemExit(0 if u.find_spec({module!r}) else 1)"
     )
+    py = settings.resolved_python_bin()
     status, out, err = _run_probe(
-        backend, settings, ["python3", "-c", code], timeout_s
+        backend, settings, [py, "-c", code], timeout_s
     )
     check_name = f"module.{module}"
     if status == RunStatus.SUCCESS:

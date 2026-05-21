@@ -78,6 +78,14 @@ The CI workflow `.github/workflows/runtime-compatibility.yml`
 
 ## Known issues
 
+### `presto.waterfaller` Python interpreter
+
+At startup the server probes ``PRESTO_IMAGE`` for ``python3`` then ``python``
+(``which`` inside a one-off container) and caches the result for
+``presto.waterfaller``. Override with ``PRESTO_PYTHON_BIN=python`` or
+``PRESTO_PYTHON_BIN=python3`` if auto-detection is wrong. The headless wrapper
+resolves ``waterfaller.py`` via ``which waterfaller.py`` or common install paths.
+
 ### `rrattrap.py` present, `presto.singlepulse` not importable
 
 The confirmed, motivating case. Some PRESTO images install `rrattrap.py` on

@@ -24,7 +24,7 @@ One consistent way to install, configure, and connect clients. Designed for onbo
 ### 1. Requirements
 
 - Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker running
-- Image: `docker pull alex88ridolfi/presto5:png`
+- Image: set `PRESTO_IMAGE` in `.env` (default `alex88ridolfi/presto5:png`). On startup the server can auto-pull if missing (`PRESTO_PULL_IMAGE_ON_START=true`).
 
 ### 2. Clone and install
 
@@ -32,6 +32,7 @@ One consistent way to install, configure, and connect clients. Designed for onbo
 git clone <your-fork-or-repo-url>
 cd MCP-Server-Presto
 uv sync --extra dev
+# optional if PRESTO_PULL_IMAGE_ON_START=true (default)
 docker pull alex88ridolfi/presto5:png
 ```
 
@@ -68,13 +69,17 @@ If you need deeper control, you can add any of these variables to `.env`:
 | `PRESTO_AUTO_START_DOCKER` | Windows/macOS: `true`; Linux: `false` | Disable/enable Docker Desktop auto-start behavior. |
 | `PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS` | `120` | Give Docker more total time to become available. |
 | `PRESTO_AUTO_START_DOCKER_STARTUP_WAIT_SECONDS` | `45` | Startup wait cap for stdio clients before retrying Connect. |
+| `PRESTO_PULL_IMAGE_ON_START` | `true` | If `PRESTO_IMAGE` is missing locally, run `docker pull` at startup. |
+| `PRESTO_PULL_IMAGE_TIMEOUT_SECONDS` | `900` | Max seconds to wait for `docker pull` during startup. |
 | `PRESTO_DEFAULT_CPUS` | `4` | Increase/decrease CPU per PRESTO invocation. |
 | `PRESTO_DEFAULT_MEMORY_MB` | `8192` | Increase memory for heavy jobs or reduce on small hosts. |
 | `PRESTO_DEFAULT_TIMEOUT_SECONDS` | `1800` | Increase timeout for long runs. |
 | `PRESTO_MAX_CONCURRENT_RUNS` | `2` | Allow multiple concurrent Docker runs (advanced). |
 | `PRESTO_NETWORK` | `none` | Keep isolated; change only for debugging. |
 | `PRESTO_SKIP_HEALTHCHECK` | `false` | Tests/debug only; do not use in production. |
-| `PRESTO_LOG_LEVEL` | `INFO` | Verbose startup/debug logs (`DEBUG`) when troubleshooting. |
+| `PRESTO_LOG_LEVEL` | `INFO` | Console/file verbosity (`DEBUG` for troubleshooting). |
+| `PRESTO_LOG_TO_FILE` | `true` | Mirror stderr logs to `server_sessions/<session_id>.log`. |
+| `PRESTO_PYTHON_BIN` | *(auto)* | `python3` or `python` inside the image; empty = detect at startup. |
 
 ### 4. Verify startup
 
@@ -84,7 +89,7 @@ From the repo root:
 uv run --directory . python -m presto_mcp.server
 ```
 
-You should see `presto-mcp ready` in the logs and, in an interactive terminal, a **RUNNING — ready for an MCP client** banner on stderr. Press Ctrl+C to stop. If startup fails, read the **banner on stderr** (also visible in the MCP Inspector terminal): it lists the error code, a short summary, and numbered remediation steps.
+You should see phase-tagged lines on stderr (`[startup]`, `[docker]`, `[server]`, …) ending with `[server] ready | image=…`, plus a **RUNNING** banner in an interactive terminal. Press Ctrl+C to stop. If startup fails, read the **banner on stderr** (also visible in the MCP Inspector terminal): it lists the error code, a short summary, and numbered remediation steps.
 
 **Common startup failure — `DOCKER_DAEMON_DOWN`:** Docker is installed but Docker Desktop is not running. On Windows/macOS the server can try to launch it automatically (`PRESTO_AUTO_START_DOCKER=true` by default; wait up to `PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS`). You can also start Docker Desktop manually, confirm `docker info` works, then restart presto-mcp.
 
@@ -261,6 +266,33 @@ docker run --rm alex88ridolfi/presto5:png which readfile rfifind prepfold
 ```
 
 Startup health checks call `docker info`, not only `docker --version`; the daemon must be running. `presto.validate_environment` reports CLI, daemon, and image checks separately.
+
+### Server logs (console + file)
+
+All logs go to **stderr** (stdout stays JSON-RPC-only). Each line uses a short phase tag:
+
+| Phase | Meaning |
+|-------|---------|
+| `[startup]` | Health check (data, Docker daemon, image) |
+| `[docker]` | Daemon auto-start, image pull/inspect |
+| `[server]` | Process ready/stop, session paths |
+| `[mcp]` | MCP tool call in/out (`→ presto.readfile`, `← …`) |
+| `[run]` | PRESTO execution in Docker (`start` / `done`) |
+| `[audit]` | Audit session open/close |
+
+When `PRESTO_LOG_TO_FILE=true` (default), the same lines are appended to:
+
+- `PRESTO_LOGS_DIR/server_sessions/<session_id>.log`
+
+One file per server process (same `session_id` as the audit log below).
+
+### MCP audit log (JSONL)
+
+Structured, machine-readable audit trail:
+
+- `PRESTO_LOGS_DIR/mcp_audit_sessions/<session_id>.jsonl`
+
+Each tool call adds two JSON lines (`request` / `response`) with arguments, duration, `run_id`, and `status`. Use this for automated review; use `server_sessions/*.log` for human-readable timelines.
 
 ---
 

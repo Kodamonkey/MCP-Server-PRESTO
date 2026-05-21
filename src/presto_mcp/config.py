@@ -8,7 +8,6 @@ state.
 
 from __future__ import annotations
 
-import logging
 import os
 import stat
 import sys
@@ -23,11 +22,36 @@ from .docker_runtime import (
     DockerInfoResult,
     diagnose_docker_info_failure,
     ensure_docker_daemon,
+    ensure_presto_image,
     format_startup_failure_banner,
+    resolve_container_python,
     resolve_docker_bin,
 )
+from .logging_setup import phase_logger
 
-log = logging.getLogger("presto_mcp.config")
+log = phase_logger("startup", "presto_mcp.config")
+
+_RESOLVED_CONTAINER_PYTHON: str | None = None
+_DEFAULT_CONTAINER_PYTHON = "python3"
+
+
+def get_resolved_container_python(settings: Settings) -> str:
+    """Python binary for container scripts; set at startup or via env."""
+    if settings.python_bin.strip():
+        return settings.python_bin.strip()
+    if _RESOLVED_CONTAINER_PYTHON is not None:
+        return _RESOLVED_CONTAINER_PYTHON
+    return _DEFAULT_CONTAINER_PYTHON
+
+
+def set_resolved_container_python(value: str) -> None:
+    global _RESOLVED_CONTAINER_PYTHON
+    _RESOLVED_CONTAINER_PYTHON = value
+
+
+def clear_resolved_container_python() -> None:
+    global _RESOLVED_CONTAINER_PYTHON
+    _RESOLVED_CONTAINER_PYTHON = None
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -97,8 +121,16 @@ class Settings:
     auto_start_docker: bool = False
     auto_start_docker_timeout_s: int = 120
     auto_start_docker_startup_wait_s: int = 45
+    pull_image_on_start: bool = True
+    pull_image_timeout_s: int = 900
+    log_to_file: bool = True
+    python_bin: str = ""
     max_concurrent_runs: int = 1
     tool_profile: str = "all"
+
+    def resolved_python_bin(self) -> str:
+        """Python executable for in-container scripts (e.g. waterfaller headless)."""
+        return get_resolved_container_python(self)
 
     def with_overrides(self, **kwargs: object) -> Settings:
         """Return a copy with selected fields replaced (test helper)."""
@@ -131,6 +163,12 @@ def _load_from_env() -> Settings:
         auto_start_docker_startup_wait_s=_env_int_min(
             "PRESTO_AUTO_START_DOCKER_STARTUP_WAIT_SECONDS", 45, 10
         ),
+        pull_image_on_start=_env_bool("PRESTO_PULL_IMAGE_ON_START", True),
+        pull_image_timeout_s=_env_int_min(
+            "PRESTO_PULL_IMAGE_TIMEOUT_SECONDS", 900, 60
+        ),
+        log_to_file=_env_bool("PRESTO_LOG_TO_FILE", True),
+        python_bin=os.environ.get("PRESTO_PYTHON_BIN", "").strip(),
         max_concurrent_runs=_env_int_min("PRESTO_MAX_CONCURRENT_RUNS", 2, 1),
         tool_profile=os.environ.get("PRESTO_TOOL_PROFILE", "all").strip().lower(),
     )
@@ -233,10 +271,13 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
       * ``data_dir`` exists and contains at least one file.
       * No file under ``data_dir`` is 0 bytes (OneDrive placeholder detection).
       * ``docker`` is on PATH and the daemon responds to ``docker info``.
+      * ``PRESTO_IMAGE`` is present locally (optional auto-``docker pull`` on start).
     """
     if s.skip_healthcheck:
-        log.warning("PRESTO_SKIP_HEALTHCHECK=true; bypassing startup health check.")
+        log.warning("health check skipped (PRESTO_SKIP_HEALTHCHECK=true)")
         return
+
+    log.info("health check: data_dir %s", s.data_dir)
 
     if not s.data_dir.is_dir():
         raise HealthCheckError(
@@ -297,6 +338,9 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
             detail=names,
         )
 
+    log.info("health check: observation files ok")
+
+    log.info("health check: docker daemon")
     docker = resolve_docker_bin(docker_bin)
     if not docker:
         raise HealthCheckError.from_docker_diagnosis(
@@ -323,3 +367,36 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
     )
     if diagnosis is not None:
         raise HealthCheckError.from_docker_diagnosis(diagnosis)
+
+    log.info("health check: docker daemon ok")
+    log.info("health check: image %s", s.image)
+    image_diagnosis = ensure_presto_image(
+        docker,
+        s.image,
+        pull_if_missing=s.pull_image_on_start,
+        pull_timeout_s=s.pull_image_timeout_s,
+    )
+    if image_diagnosis is not None:
+        raise HealthCheckError.from_docker_diagnosis(image_diagnosis)
+
+    log.info("health check: image ok")
+
+    try:
+        py = resolve_container_python(docker, s.image, s.python_bin)
+    except ValueError as e:
+        raise HealthCheckError(
+            str(e),
+            code="CONTAINER_PYTHON_MISSING",
+            remediation=(
+                "Set PRESTO_PYTHON_BIN to python3 or python (whichever exists in PRESTO_IMAGE).",
+                f"Probe manually: docker run --rm {s.image} which python3",
+                "Restart presto-mcp after fixing .env.",
+            ),
+        ) from e
+    set_resolved_container_python(py)
+    if s.python_bin.strip():
+        log.info("health check: container python %s (PRESTO_PYTHON_BIN)", py)
+    else:
+        log.info("health check: container python %s (auto-detected)", py)
+
+    log.info("health check passed")

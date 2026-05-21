@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import os
 import runpy
+import shutil
 import sys
+from pathlib import Path
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
@@ -19,7 +21,26 @@ matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 
 OUTPUT = os.environ.get("WATERFALL_OUTPUT", "waterfall.png")
-PRESTO_WATERFALLER = "/software/presto5/installation/bin/waterfaller.py"
+
+
+def _resolve_waterfaller_script() -> str:
+    """Locate upstream ``waterfaller.py`` inside the PRESTO image."""
+    override = os.environ.get("PRESTO_WATERFALLER_SCRIPT", "").strip()
+    if override:
+        return override
+    found = shutil.which("waterfaller.py")
+    if found:
+        return found
+    for candidate in (
+        "/software/presto5/installation/bin/waterfaller.py",
+        "/usr/local/bin/waterfaller.py",
+    ):
+        if Path(candidate).is_file():
+            return candidate
+    return "/software/presto5/installation/bin/waterfaller.py"
+
+
+PRESTO_WATERFALLER = _resolve_waterfaller_script()
 
 
 def _headless_show(*_args: object, **_kwargs: object) -> None:
