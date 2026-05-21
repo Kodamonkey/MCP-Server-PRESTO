@@ -38,6 +38,14 @@ DM_RANGE_MAX_SPAN = 5000.0
 ACCELSEARCH_MIN_ZMAX = 0
 ACCELSEARCH_MAX_ZMAX = 1200
 ACCELSEARCH_VALID_NUMHARM = (1, 2, 4, 8, 16, 32)
+ACCELSEARCH_MIN_WMAX = 0
+ACCELSEARCH_MAX_WMAX = 1200
+ACCELSEARCH_SIGMA_MIN = 1.0
+ACCELSEARCH_SIGMA_MAX = 30.0
+ACCELSEARCH_NCPUS_MIN = 1
+ACCELSEARCH_NCPUS_MAX = 64
+ACCELSEARCH_CAND_LIMIT_MIN = 1
+ACCELSEARCH_CAND_LIMIT_MAX = 1000
 
 # prepsubband / DDplan
 SUBBAND_MIN = 1
@@ -224,6 +232,56 @@ def check_numharm(n: int) -> int:
     if n not in ACCELSEARCH_VALID_NUMHARM:
         raise PolicyViolationError(
             f"numharm {n} must be one of {ACCELSEARCH_VALID_NUMHARM}"
+        )
+    return n
+
+
+def check_accelsearch_wmax(w: int | None) -> int | None:
+    if w is None:
+        return None
+    if not isinstance(w, int) or isinstance(w, bool):
+        raise PolicyViolationError(f"wmax must be int, got {type(w).__name__}")
+    if not (ACCELSEARCH_MIN_WMAX <= w <= ACCELSEARCH_MAX_WMAX):
+        raise PolicyViolationError(
+            f"wmax {w} outside [{ACCELSEARCH_MIN_WMAX}, {ACCELSEARCH_MAX_WMAX}]"
+        )
+    return w
+
+
+def check_accelsearch_sigma(v: float | None) -> float | None:
+    if v is None:
+        return None
+    f = float(v)
+    if not (ACCELSEARCH_SIGMA_MIN <= f <= ACCELSEARCH_SIGMA_MAX):
+        raise PolicyViolationError(
+            f"sigma {v} outside [{ACCELSEARCH_SIGMA_MIN}, {ACCELSEARCH_SIGMA_MAX}]"
+        )
+    return f
+
+
+def check_accelsearch_ncpus(n: int | None) -> int | None:
+    if n is None:
+        return None
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"ncpus must be int, got {type(n).__name__}")
+    if not (ACCELSEARCH_NCPUS_MIN <= n <= ACCELSEARCH_NCPUS_MAX):
+        raise PolicyViolationError(
+            f"ncpus {n} outside [{ACCELSEARCH_NCPUS_MIN}, {ACCELSEARCH_NCPUS_MAX}]"
+        )
+    return n
+
+
+def check_accelsearch_candidate_limit(n: int | None) -> int | None:
+    if n is None:
+        return None
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(
+            f"candidate_limit must be int, got {type(n).__name__}"
+        )
+    if not (ACCELSEARCH_CAND_LIMIT_MIN <= n <= ACCELSEARCH_CAND_LIMIT_MAX):
+        raise PolicyViolationError(
+            f"candidate_limit {n} outside "
+            f"[{ACCELSEARCH_CAND_LIMIT_MIN}, {ACCELSEARCH_CAND_LIMIT_MAX}]"
         )
     return n
 
@@ -580,6 +638,94 @@ def check_pfdzap_commands(cmds: list[str] | None) -> list[str] | None:
             f"pfdzap commands must match '<low>:<high>'; bad tokens: {bad[:5]}"
         )
     return cmds
+
+
+# -- stacksearch / simple_zapbirds / compare_periods --------------------------
+
+STACKSEARCH_MIN_FFT = 2
+STACKSEARCH_MAX_FFT = 256
+SIMPLE_ZAPBIRDS_MAX_FFT = 256
+
+PERIOD_MS_MIN = 1e-3
+PERIOD_MS_MAX = 1.0e8  # 100 s
+COMPARE_TOLERANCE_MIN = 1e-9
+COMPARE_TOLERANCE_MAX = 0.5
+COMPARE_MAX_HARMONIC_MIN = 1
+COMPARE_MAX_HARMONIC_MAX = 64
+PAR_FILE_COUNT_MIN = 1
+PAR_FILE_COUNT_MAX = 256
+
+
+def check_stacksearch_input_count(n: int) -> int:
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"fft file count must be int, got {type(n).__name__}")
+    if n < STACKSEARCH_MIN_FFT:
+        raise PolicyViolationError(
+            f"stacksearch requires at least {STACKSEARCH_MIN_FFT} .fft files"
+        )
+    if n > STACKSEARCH_MAX_FFT:
+        raise PolicyViolationError(
+            f"stacksearch input count {n} exceeds cap {STACKSEARCH_MAX_FFT}"
+        )
+    return n
+
+
+def check_simple_zapbirds_input_count(n: int) -> int:
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"fft file count must be int, got {type(n).__name__}")
+    if n < 1:
+        raise PolicyViolationError("simple_zapbirds requires at least one .fft file")
+    if n > SIMPLE_ZAPBIRDS_MAX_FFT:
+        raise PolicyViolationError(
+            f"simple_zapbirds input count {n} exceeds cap {SIMPLE_ZAPBIRDS_MAX_FFT}"
+        )
+    return n
+
+
+def check_period_ms(period_ms: float) -> float:
+    f = float(period_ms)
+    if not (PERIOD_MS_MIN <= f <= PERIOD_MS_MAX):
+        raise PolicyViolationError(
+            f"period_ms {period_ms} outside [{PERIOD_MS_MIN}, {PERIOD_MS_MAX}]"
+        )
+    return f
+
+
+def check_compare_tolerance(tol: float | None) -> float:
+    if tol is None:
+        return 1e-3
+    f = float(tol)
+    if not (COMPARE_TOLERANCE_MIN <= f <= COMPARE_TOLERANCE_MAX):
+        raise PolicyViolationError(
+            f"tolerance {tol} outside [{COMPARE_TOLERANCE_MIN}, {COMPARE_TOLERANCE_MAX}]"
+        )
+    return f
+
+
+def check_compare_max_harmonic(n: int | None) -> int:
+    if n is None:
+        return 8
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PolicyViolationError(f"max_harmonic must be int, got {type(n).__name__}")
+    if not (COMPARE_MAX_HARMONIC_MIN <= n <= COMPARE_MAX_HARMONIC_MAX):
+        raise PolicyViolationError(
+            f"max_harmonic {n} outside "
+            f"[{COMPARE_MAX_HARMONIC_MIN}, {COMPARE_MAX_HARMONIC_MAX}]"
+        )
+    return n
+
+
+def check_par_file_count(files: list[str]) -> list[str]:
+    if not isinstance(files, list):
+        raise PolicyViolationError(f"par_files must be list, got {type(files).__name__}")
+    n = len(files)
+    if n < PAR_FILE_COUNT_MIN:
+        raise PolicyViolationError("compare_periods requires at least one .par file")
+    if n > PAR_FILE_COUNT_MAX:
+        raise PolicyViolationError(
+            f"par_files count {n} exceeds cap {PAR_FILE_COUNT_MAX}"
+        )
+    return files
 
 
 def check_search_bin_freq_range(

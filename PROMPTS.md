@@ -35,10 +35,15 @@ duration) but no heavy search yet.
 
 **When to use.** Looking for FRB-like / RRAT-like / giant-pulse events.
 
-**Tools recommended.** `presto.readfile` → `presto.rfifind` →
-`presto.ddplan` → `presto.prepsubband` (or `presto.prepdata`) →
-`presto.single_pulse_search` → `presto.rrattrap` → `presto.make_spd` →
-`presto.plot_spd` → `presto.waterfaller` (per candidate).
+**Tools recommended.** `presto.validate_environment` →
+`presto.readfile` → `presto.rfifind` → `presto.ddplan` →
+`presto.prepsubband` (or `presto.prepdata`) → `presto.single_pulse_search` →
+`presto.rrattrap` *(only if readiness OK)* → `presto.make_spd` →
+`presto.plot_spd` → `presto.waterfaller` →
+`presto.compile_candidate_report_pdf`.
+
+The prompt now leads with `validate_environment`, gates `rrattrap` on tool
+readiness, and carries the artifact / noise / candidate / detection taxonomy.
 
 ## `presto.periodic_search_plan`
 
@@ -52,10 +57,15 @@ duration) but no heavy search yet.
 **When to use.** Hunting an isolated or binary pulsar via Fourier /
 acceleration search.
 
-**Tools recommended.** `presto.readfile` → `presto.rfifind` →
-`presto.ddplan` → `presto.prepdata`/`presto.prepsubband` → `presto.realfft`
-→ `presto.zapbirds` (optional) → `presto.accelsearch` → `presto.sifting` →
-`presto.prepfold` → `presto.get_toas` (optional).
+**Tools recommended.** `presto.validate_environment` →
+`presto.readfile` → `presto.rfifind` → `presto.ddplan` →
+`presto.prepdata`/`presto.prepsubband` → `presto.realfft` →
+`presto.zapbirds` / `presto.simple_zapbirds` (optional) →
+`presto.accelsearch` → `presto.sifting` → `presto.prepfold` →
+`presto.get_toas` (optional) → `presto.compile_candidate_report_pdf`.
+
+Guardrails: do not pass `accelsearch` `wmax` unless readiness confirms it; do
+not fold without a traceable period; the FFT is never modified in place.
 
 ## `presto.fold_known_candidate_plan`
 
@@ -96,6 +106,23 @@ evidence lives. Strictly distinguishes *artifact* / *noise* / *candidate* /
 
 **Tools recommended.** `presto.list_runs`, `presto.get_run_manifest`,
 `presto.summarize_run`.
+
+## `presto.candidate_review_plan`
+
+| Input    | Type           | Notes                                            |
+|----------|----------------|--------------------------------------------------|
+| `run_id` | `str` (opt)    | If omitted, surveys recent runs first.           |
+
+**When to use.** An improved sibling of
+`presto.generate_candidate_report_plan`: review existing run artifacts, add
+known-pulsar cross-checks, and produce a bundled PDF.
+
+**Tools recommended.** `presto.summarize_run` → `presto.inspect_artifacts` →
+`presto.pfd2png` / `presto.waterfaller` → `presto.compare_periods` →
+`presto.binary_info` → `presto.compile_candidate_report_pdf`.
+
+Enforces the artifact / noise / candidate / detection taxonomy and explicitly
+refuses to confirm a detection without human or external validation.
 
 ---
 

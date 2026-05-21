@@ -129,7 +129,7 @@ Trabajos largos: `"background": true` y luego `presto.get_run_manifest` hasta `S
 | `presto.zapbirds`            | Apply zaplist to `.fft`                             |
 | **Timing & transients**      |                                                     |
 | `presto.get_toas`            | Times of arrival from `.pfd` + template             |
-| `presto.rrattrap`            | Group single-pulse events                           |
+| `presto.rrattrap` *(experimental / image-dependent)* | Group single-pulse events      |
 | `presto.make_spd`            | Build single-pulse diagnostic `.spd`                |
 | `presto.plot_spd`            | Render SPD plot (PNG/PS)                            |
 | `presto.waterfaller`         | Dynamic-spectrum (waterfall) PNG around a candidate |
@@ -146,9 +146,39 @@ Trabajos largos: `"background": true` y luego `presto.get_run_manifest` hasta `S
 | **Advanced (new)**           |                                                     |
 | `presto.sum_profiles` *(experimental)* | Combine multiple `.bestprof` / `.prof`     |
 | `presto.search_bin` *(advanced)* | Phase-modulation / sideband search for binaries |
+| `presto.stacksearch` *(experimental / image-dependent)* | Stack search over many `.fft` |
+| `presto.simple_zapbirds` *(experimental / image-dependent)* | Zap birdies from a `.fft` (on a staged copy) |
+| **Known-pulsar & review (new)** |                                                  |
+| `presto.compare_periods` *(utility)* | Cross-check a candidate period vs `.par` ephemerides |
+| `presto.binary_info` *(utility)* | Orbital summary + Doppler range from a binary `.par` |
+| `presto.compile_candidate_report_pdf` *(utility)* | Bundle run plot artifacts into one PDF |
 
 
-Tools tagged *(experimental)* / *(advanced)* may not be available in every PRESTO image — run `presto.validate_environment` first.
+**Tool status taxonomy.** `stable` · `experimental` (awaiting image
+verification) · `image-dependent` (correctness depends on image contents,
+readiness-gated) · `advanced` (wide parameter space) · `utility` (no Docker).
+
+### Runtime compatibility
+
+Not every PRESTO image ships every routine, and some ship a script without the
+internal Python module it imports. **Recommended first calls in any session:**
+
+```text
+presto.validate_environment(include_tool_readiness=true)
+presto.list_data_files(limit=20)
+presto.readfile(input_file="<your file>")
+```
+
+`presto.validate_environment` probes the image with lightweight Docker commands
+and reports per-tool readiness (`runtime_compatibility.tool_readiness`).
+Image-dependent tools (`rrattrap`, `stacksearch`, `simple_zapbirds`, and the
+`accelsearch -wmax` jerk flag) check readiness first and fail fast with a
+controlled, actionable error rather than a confusing traceback.
+
+Known case: some PRESTO images expose `rrattrap.py` but cannot
+`import presto.singlepulse`; `presto.rrattrap` then refuses to run and points
+you at `presto.validate_environment`. See
+[RUNTIME_COMPATIBILITY.md](./RUNTIME_COMPATIBILITY.md) for the full picture.
 
 **Chaining runs:** tools that consume prior outputs take paths like `<run_id>/artifacts/file.dat` relative to `runs/` (see each tool’s parameter docs in the Inspector or client).
 
@@ -226,16 +256,19 @@ Beyond the PRESTO-binary tools, the server exposes utility tools, navigation res
 **Utility tools** (no Docker, no PRESTO execution) — see [TOOLS.md](./TOOLS.md):
 
 ```text
-presto.validate_environment    # OK/WARN/ERROR per-check report (settings, dirs, docker, image, policies)
-presto.list_data_files         # index files under PRESTO_DATA_DIR
-presto.summarize_run           # structured per-run summary + next_suggested_tools
-presto.inspect_artifacts       # per-artifact index with resource URIs
+presto.validate_environment        # per-check report + per-tool readiness
+presto.list_data_files             # index files under PRESTO_DATA_DIR
+presto.summarize_run               # structured per-run summary + next_suggested_tools
+presto.inspect_artifacts           # per-artifact index with resource URIs
+presto.compare_periods             # candidate period vs .par ephemerides
+presto.binary_info                 # orbital summary from a binary .par
+presto.compile_candidate_report_pdf  # bundle run plots into one review PDF
 ```
 
 Quick check from Inspector:
 
 ```text
-presto.validate_environment(check_image=true)
+presto.validate_environment(include_tool_readiness=true)
 presto.list_data_files(limit=20, extensions=[".fil",".fits"])
 ```
 
@@ -266,13 +299,19 @@ Details: [ARCHITECTURE.md](./ARCHITECTURE.md). Agent conventions: [AGENTS.md](./
 
 ---
 
-## Limits
+## Limits & known limitations
 
 - **Stdout parsers only** for structured fields; binary products (`.mask`, `.pfd`, PNGs) are artifacts/resources, not decoded server-side.
 - `**prepfold` Mode A** — known period + DM; accel-cand folding is not wired yet.
 - **STDIO only** — no HTTP transport.
 - `**list_runs`** walks `runs/*/manifest.json` (fine for thousands of runs).
 - Stdout/stderr are still captured in memory before writing logs; diagnostics returned to clients are bounded, full logs remain in run resources.
+- **Image-dependent tools** (`rrattrap`, `stacksearch`, `simple_zapbirds`, `accelsearch -wmax`) only work when the configured PRESTO image provides the routine — check `presto.validate_environment(include_tool_readiness=true)`. See [RUNTIME_COMPATIBILITY.md](./RUNTIME_COMPATIBILITY.md).
+- `presto.binary_info` `make_plot` is not supported (it is a no-Docker utility tool); orbital plots come from `presto.prepfold` / `presto.pfd2png`.
+- Adaptive orchestration (resume/restart, autonomous search) is **out of scope** — it belongs to a future LangGraph layer above this MCP.
+
+Contributing — read [CONTRIBUTING.md](./CONTRIBUTING.md) (especially the
+anti-bloat rule). Release history — [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 

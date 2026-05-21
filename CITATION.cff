@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "PRESTO MCP Server"
+abstract: >-
+  A typed, sandboxed Model Context Protocol (MCP) server that exposes the
+  PRESTO pulsar / radio-astronomy toolchain to LLMs. Every invocation runs
+  inside Docker and produces an auditable on-disk manifest.
+type: software
+authors:
+  - family-names: Salgado
+    given-names: Sebastian
+version: 0.1.0
+date-released: 2026-05-20
+license: MIT
+repository-code: "https://github.com/Kodamonkey/MCP-Server-PRESTO"
+keywords:
+  - pulsar
+  - radio-astronomy
+  - PRESTO
+  - model-context-protocol
+  - mcp
+references:
+  - type: software
+    title: "PRESTO: PulsaR Exploration and Search TOolkit"
+    authors:
+      - family-names: Ransom
+        given-names: Scott
+    repository-code: "https://github.com/scottransom/presto"

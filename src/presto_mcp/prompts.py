@@ -16,6 +16,25 @@ DISCLAIMER = (
     "layer ships atomic, sandboxed capabilities and never invents results."
 )
 
+# Shared guardrail blocks reused across plan prompts.
+READINESS_NOTE = (
+    "Readiness gate: before any experimental / image-dependent tool, call "
+    "`presto.validate_environment` with include_tool_readiness=true and inspect "
+    "`runtime_compatibility.tool_readiness`. If a tool is not ready (status "
+    "ERROR / blocking), SKIP it and report the limitation — never guess around "
+    "a missing runtime dependency."
+)
+
+TAXONOMY = (
+    "Evidence taxonomy — never blur these levels:\n"
+    "  - artifact: a file on disk. No scientific claim.\n"
+    "  - noise / RFI: a feature explained by interference or statistics.\n"
+    "  - candidate: survives sifting / an SNR threshold; worth follow-up.\n"
+    "  - detection / confirmed detection: requires multi-DM and multi-pass\n"
+    "    consistency, a clean folded profile, AND human or external validation.\n"
+    "Do NOT assert a detection or a scientific confirmation from artifacts alone."
+)
+
 
 def _fmt_opt(label: str, value: object | None) -> str:
     return f"{label}={value}" if value is not None else f"{label}=<unset>"
@@ -57,6 +76,8 @@ def build_single_pulse_search_plan(
         f"Params: {_fmt_opt('dm_low', dm_low)}, {_fmt_opt('dm_high', dm_high)}, "
         f"{_fmt_opt('threshold', threshold)}\n\n"
         f"Conceptual pipeline (issue as discrete tool calls):\n"
+        f"0. `presto.validate_environment` (include_tool_readiness=true) — confirm\n"
+        f"   Docker, the PRESTO image and per-tool readiness FIRST.\n"
         f"1. `presto.readfile` — confirm metadata (freq, bw, channels, sample time, duration).\n"
         f"2. `presto.rfifind` — produce a .mask for the observation.\n"
         f"3. `presto.ddplan` — derive an optimal DM-trial plan from the metadata\n"
@@ -65,15 +86,21 @@ def build_single_pulse_search_plan(
         f"   using the .mask from step 2.\n"
         f"5. `presto.single_pulse_search` on the resulting .dat files\n"
         f"   (threshold={_fmt_opt('threshold', threshold)}).\n"
-        f"6. `presto.rrattrap` to group .singlepulse events.\n"
+        f"6. `presto.rrattrap` to group .singlepulse events — ONLY if step 0\n"
+        f"   reported it ready (it needs the module presto.singlepulse). If not\n"
+        f"   ready, skip it and continue with the .singlepulse files directly.\n"
         f"7. `presto.make_spd` to produce single-pulse diagnostic .spd files.\n"
         f"8. `presto.plot_spd` to render diagnostic PNGs.\n"
         f"9. For interesting candidates, `presto.waterfaller` around the event\n"
-        f"   (start_s, duration_s, dm).\n\n"
+        f"   (start_s, duration_s, dm).\n"
+        f"10. `presto.compile_candidate_report_pdf` — bundle the plot artifacts\n"
+        f"    into one reviewable PDF.\n\n"
         f"Rules:\n"
         f"- Do NOT invent candidates if no artifacts exist; report 'no detections'.\n"
         f"- Each step writes its own run with manifest + stdout + stderr URIs;\n"
         f"  chain by passing `<run_id>/artifacts/<file>` to the next tool.\n\n"
+        f"{READINESS_NOTE}\n\n"
+        f"{TAXONOMY}\n\n"
         f"{DISCLAIMER}\n"
     )
 
@@ -90,21 +117,32 @@ def build_periodic_search_plan(
         f"Params: {_fmt_opt('dm_low', dm_low)}, {_fmt_opt('dm_high', dm_high)}, "
         f"{_fmt_opt('zmax', zmax)}\n\n"
         f"Conceptual pipeline:\n"
+        f"0. `presto.validate_environment` (include_tool_readiness=true) — confirm\n"
+        f"   Docker, the PRESTO image and per-tool readiness FIRST.\n"
         f"1. `presto.readfile` — confirm metadata.\n"
         f"2. `presto.rfifind` — produce a .mask.\n"
         f"3. `presto.ddplan` — derive DM trials from the metadata + dm_low/dm_high.\n"
         f"4. `presto.prepdata` (single trial) or `presto.prepsubband` (range) using\n"
         f"   the .mask from step 2.\n"
         f"5. `presto.realfft` on each .dat to produce .fft.\n"
-        f"6. Optional: `presto.zapbirds` to apply a known-birds zaplist to the .fft.\n"
+        f"6. Optional: `presto.zapbirds` or `presto.simple_zapbirds` to remove\n"
+        f"   known birdies from the .fft. Both stage a copy — the source .fft is\n"
+        f"   never modified in place.\n"
         f"7. `presto.accelsearch` on each .fft (zmax={_fmt_opt('zmax', zmax)}).\n"
+        f"   Advanced flags (wmax jerk search, sigma, ncpus) are image-dependent —\n"
+        f"   do NOT pass `wmax` unless step 0 / accelsearch readiness confirms it.\n"
         f"8. `presto.sifting` across all ACCEL_* candidate files to dedupe/rank.\n"
         f"9. `presto.prepfold` on top surviving candidates (period + DM).\n"
-        f"10. Optional: `presto.get_toas` if a folded .pfd + template is available.\n\n"
+        f"10. Optional: `presto.get_toas` if a folded .pfd + template is available.\n"
+        f"11. `presto.compile_candidate_report_pdf` — bundle plots for review.\n\n"
         f"Rules:\n"
+        f"- Do NOT fold (`prepfold`) without a traceable period from a sifting\n"
+        f"  survivor or an explicit known ephemeris.\n"
         f"- Do NOT report a detection from a single DM trial; require sifting\n"
         f"  survivors and a clean folded profile.\n"
         f"- Cite artifact URIs (`presto://runs/<id>/artifacts/...`) when reporting.\n\n"
+        f"{READINESS_NOTE}\n\n"
+        f"{TAXONOMY}\n\n"
         f"{DISCLAIMER}\n"
     )
 
@@ -323,39 +361,97 @@ def build_tool_selection_guide(task: str) -> str:
     return (
         f"# Tool selection guide\n\n"
         f"Task: {task}\n\n"
-        f"Map the user's task to the right typed tool(s):\n\n"
+        f"ALWAYS start a session with these three calls:\n"
+        f"  1. `presto.validate_environment` (include_tool_readiness=true) —\n"
+        f"     confirm Docker, the PRESTO image, and per-tool readiness.\n"
+        f"  2. `presto.list_data_files` — see what observation files exist.\n"
+        f"  3. `presto.readfile` — read metadata for the chosen file.\n\n"
+        f"Then pick the branch that matches the goal:\n"
+        f"  - **single-pulse** (FRBs, RRATs, giant pulses) → prompt\n"
+        f"    `presto.single_pulse_search_plan`.\n"
+        f"  - **periodic search** (pulsars, Fourier/acceleration) → prompt\n"
+        f"    `presto.periodic_search_plan`.\n"
+        f"  - **candidate review** (assess existing run artifacts) → prompt\n"
+        f"    `presto.candidate_review_plan`.\n"
+        f"  - **binary / known-pulsar cross-check** → `presto.compare_periods`\n"
+        f"    + `presto.binary_info` (both no-Docker utility tools).\n\n"
+        f"Map a free-form task to the right typed tool(s):\n\n"
         f"- **Data preparation / inspection**: `presto.readfile`,\n"
         f"  `presto.list_data_files`, `presto.psrfits2fil`,\n"
         f"  `presto.fb_truncate`, `presto.downsample_filterbank`.\n"
         f"- **RFI mitigation**: `presto.rfifind`, `presto.rfifind_stats`\n"
         f"  (experimental), `presto.weights_to_ignorechan` (experimental),\n"
-        f"  `presto.makezaplist` (experimental), `presto.zapbirds`.\n"
+        f"  `presto.makezaplist` (experimental), `presto.zapbirds`,\n"
+        f"  `presto.simple_zapbirds` (experimental).\n"
         f"- **Dedispersion**: `presto.ddplan`, `presto.prepdata`,\n"
         f"  `presto.prepsubband`.\n"
         f"- **Periodic search**: `presto.realfft`, `presto.accelsearch`,\n"
-        f"  `presto.sifting`, `presto.prepfold`.\n"
+        f"  `presto.sifting`, `presto.prepfold`, `presto.stacksearch`\n"
+        f"  (experimental).\n"
         f"- **Single-pulse search**: `presto.single_pulse_search`,\n"
-        f"  `presto.rrattrap`, `presto.make_spd`, `presto.plot_spd`.\n"
+        f"  `presto.rrattrap` (image-dependent), `presto.make_spd`,\n"
+        f"  `presto.plot_spd`.\n"
         f"- **Folding / candidate inspection**: `presto.prepfold`,\n"
         f"  `presto.pfd2png` (experimental), `presto.sum_profiles`\n"
         f"  (experimental).\n"
+        f"- **Known-pulsar cross-check**: `presto.compare_periods`,\n"
+        f"  `presto.binary_info` (no-Docker utility tools).\n"
         f"- **Timing**: `presto.get_toas`.\n"
-        f"- **Visualization**: `presto.waterfaller`, `presto.plot_spd`,\n"
-        f"  `presto.pfd2png` (experimental).\n"
+        f"- **Visualization / reporting**: `presto.waterfaller`,\n"
+        f"  `presto.plot_spd`, `presto.pfd2png` (experimental),\n"
+        f"  `presto.compile_candidate_report_pdf`.\n"
         f"- **Debugging / triage**: `presto.list_runs`,\n"
         f"  `presto.get_run_manifest`, `presto.summarize_run`,\n"
         f"  `presto.inspect_artifacts`, `presto.validate_environment`,\n"
         f"  `presto.explain_failed_run` (prompt).\n"
         f"- **Advanced binary search**: `presto.search_bin` (advanced).\n\n"
-        f"Always prefer running `presto.validate_environment` before relying\n"
-        f"on an experimental tool. Use `presto.list_runs` /\n"
-        f"`presto.get_run_manifest` to chain artifacts across runs.\n\n"
+        f"{READINESS_NOTE}\n\n"
+        f"Use `presto.list_runs` / `presto.get_run_manifest` to chain artifacts\n"
+        f"across runs.\n\n"
+        f"{DISCLAIMER}\n"
+    )
+
+
+def build_candidate_review_plan(run_id: str | None = None) -> str:
+    target_line = (
+        f"Focus run_id: {run_id}"
+        if run_id
+        else "No run_id supplied — survey recent runs first."
+    )
+    return (
+        f"# Candidate review plan\n\n"
+        f"{target_line}\n\n"
+        f"An improved sibling of `presto.generate_candidate_report_plan`: it adds\n"
+        f"known-pulsar cross-checks and a bundled PDF.\n\n"
+        f"Steps:\n"
+        f"1. If no run_id was supplied, call `presto.list_runs` (limit ~20).\n"
+        f"2. `presto.summarize_run` on each run of interest — artifact groupings\n"
+        f"   and suggested next tools.\n"
+        f"3. `presto.inspect_artifacts` to enumerate per-run artifacts (type,\n"
+        f"   size, resource URI).\n"
+        f"4. For folded candidates, render plots with `presto.pfd2png`; for\n"
+        f"   single pulses, `presto.waterfaller` (both image-dependent — check\n"
+        f"   readiness first).\n"
+        f"5. For a candidate period, `presto.compare_periods` against known\n"
+        f"   ephemeris .par files to rule in/out a known pulsar.\n"
+        f"6. For a binary suspect, `presto.binary_info` on its .par file for the\n"
+        f"   orbital parameters and Doppler period range.\n"
+        f"7. `presto.compile_candidate_report_pdf` — bundle every plot artifact\n"
+        f"   into one reviewable PDF.\n"
+        f"8. Write the final report citing artifact URIs as evidence.\n\n"
+        f"{TAXONOMY}\n\n"
+        f"This plan does not confirm detections. A confirmed detection always\n"
+        f"requires human review or independent external evidence.\n\n"
+        f"{READINESS_NOTE}\n\n"
         f"{DISCLAIMER}\n"
     )
 
 
 __all__ = [
     "DISCLAIMER",
+    "READINESS_NOTE",
+    "TAXONOMY",
+    "build_candidate_review_plan",
     "build_explain_failed_run",
     "build_fold_known_candidate_plan",
     "build_fold_qc_plan",

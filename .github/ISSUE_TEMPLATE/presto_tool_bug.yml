@@ -1,0 +1,79 @@
+name: PRESTO tool bug
+description: Report a failing or misbehaving presto.* MCP tool
+title: "[tool bug] "
+labels: ["bug", "tool"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Thanks for the report. Most tool failures are runtime / image issues —
+        please run `presto.validate_environment(include_tool_readiness=true)`
+        first and paste its output below. It usually pinpoints the cause.
+  - type: input
+    id: tool
+    attributes:
+      label: Tool invoked
+      description: e.g. presto.rrattrap, presto.accelsearch
+      placeholder: presto.<tool>
+    validations:
+      required: true
+  - type: textarea
+    id: validate_environment
+    attributes:
+      label: presto.validate_environment output
+      description: Run with include_tool_readiness=true and paste the result.
+      render: json
+    validations:
+      required: true
+  - type: input
+    id: presto_image
+    attributes:
+      label: PRESTO_IMAGE
+      placeholder: alex88ridolfi/presto5:png
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Host OS
+      placeholder: Windows 10 / Ubuntu 22.04 / macOS 14
+    validations:
+      required: true
+  - type: input
+    id: docker_version
+    attributes:
+      label: Docker version
+      description: Output of `docker --version`.
+    validations:
+      required: true
+  - type: input
+    id: run_id
+    attributes:
+      label: run_id
+      description: The run_id of the failed run, if one was created.
+  - type: textarea
+    id: manifest
+    attributes:
+      label: Manifest
+      description: Contents of presto://runs/<run_id>/manifest (or attach it).
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: stdout / stderr
+      description: Relevant lines from presto://runs/<run_id>/{stdout,stderr}.
+      render: shell
+  - type: textarea
+    id: invocation
+    attributes:
+      label: Command / parameters used
+      description: The exact tool call and its parameters.
+    validations:
+      required: true
+  - type: textarea
+    id: expected_vs_actual
+    attributes:
+      label: Expected vs. obtained artifacts
+      description: What artifacts you expected, and what you actually got.
+    validations:
+      required: true

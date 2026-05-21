@@ -117,7 +117,48 @@ and marked `[experimental]` / `[advanced]` where image availability is not
 guaranteed.
 
 Utility tools (`validate_environment`, `list_data_files`, `summarize_run`,
-`inspect_artifacts`) never execute PRESTO. Prompts remain guidance only.
+`inspect_artifacts`, `compare_periods`, `binary_info`,
+`compile_candidate_report_pdf`) never execute PRESTO. Prompts remain guidance
+only.
+
+## Runtime capability checks
+
+`runtime_checks.py` makes the server honest about an imperfect image. It runs
+**lightweight one-off Docker probes** (`which <binary>`,
+`python3 -c "import ..."`, `<binary> -h`) — never real PRESTO work — and turns
+the results into structured `RuntimeCheck` / `ToolReadiness` /
+`RuntimeCompatibilityResult` data. Probes reuse the same `build_invocation` +
+`backend.run` path as a real run, so there is no new subprocess surface and no
+change to `BackendProtocol`. Results are cached in-process per image tag for
+~15 minutes.
+
+Two consumers:
+
+- **Preflight gates.** `presto.rrattrap`, `presto.stacksearch`,
+  `presto.simple_zapbirds` call `get_tool_readiness` before doing work and fail
+  fast with a controlled error if a dependency is missing. `presto.ddplan` and
+  `presto.accelsearch` probe `<binary> -h` to gate image-dependent flags.
+- **Diagnostics.** `presto.validate_environment(include_tool_readiness=true)`
+  reports per-tool readiness so an agent can choose tools that will actually run.
+
+A probe that times out yields `UNKNOWN` and is **fail-open** — a transient
+Docker hiccup never permanently blocks a tool. See `RUNTIME_COMPATIBILITY.md`.
+
+## Relationship to PULSAR_MINER
+
+PULSAR_MINER is used **only as conceptual workflow inspiration — never as a
+runtime dependency**. Nothing from it is imported or vendored. Two ideas are
+borrowed:
+
+- the stage taxonomy (RFI / BIRDIES / DEDISPERSION / SIFTING / FOLDING) as a
+  vocabulary for summaries and reports;
+- the known-pulsar cross-check, implemented here as a small, transparent
+  combination of `presto.compare_periods` + `presto.binary_info` — not an
+  opaque macro-pipeline.
+
+Resume/restart, space/time estimation and full autonomous search remain the
+responsibility of a future LangGraph orchestrator above this MCP, not of the
+server itself.
 
 ## Parser strategy (MVP)
 

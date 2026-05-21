@@ -7,6 +7,9 @@ dedispersion passes:
     -----     -------    ---     --------    ------    ----   --------
     0.000     50.000     0.10    1           4.00      500    0.5000
     ...
+
+When run with ``-o`` it also writes a plot (``.eps``/``.png``) and with ``-w``
+a ``dedisp_*.py`` script — both into the run's ``artifacts/``.
 """
 
 from __future__ import annotations
@@ -28,16 +31,42 @@ _ROW = re.compile(
 )
 
 
+def _scan_artifacts(run_dir: Path) -> tuple[str | None, str | None, list[str]]:
+    """Return (plot_file, dedisp_script, notes) by scanning artifacts/."""
+    notes: list[str] = []
+    plot_file: str | None = None
+    dedisp_script: str | None = None
+    artifacts_dir = run_dir / "artifacts"
+    if not artifacts_dir.is_dir():
+        return None, None, notes
+    plots = sorted(
+        p.name
+        for p in artifacts_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in {".eps", ".png", ".ps"}
+    )
+    if plots:
+        plot_file = plots[0]
+    dedisp = sorted(
+        p.name
+        for p in artifacts_dir.iterdir()
+        if p.is_file() and p.name.startswith("dedisp") and p.suffix == ".py"
+    )
+    if dedisp:
+        dedisp_script = dedisp[0]
+    return plot_file, dedisp_script, notes
+
+
 def parse(
     stdout: str,
-    _run_dir: Path | None = None,
+    run_dir: Path | None = None,
     *,
     dm_low: float = 0.0,
     dm_high: float = 0.0,
-    freq_mhz: float = 0.0,
-    bw_mhz: float = 0.0,
-    num_channels: int = 0,
-    sample_time_us: float = 0.0,
+    freq_mhz: float | None = None,
+    bw_mhz: float | None = None,
+    num_channels: int | None = None,
+    sample_time_us: float | None = None,
+    input_file: str | None = None,
 ) -> DDplanResult:
     if not isinstance(stdout, str):
         raise ParserError(f"stdout must be str, got {type(stdout).__name__}")
@@ -73,13 +102,23 @@ def parse(
     if not passes:
         raise ParserError("DDplan stdout contained no recognizable plan rows")
 
+    plot_file: str | None = None
+    dedisp_script: str | None = None
+    notes: list[str] = []
+    if run_dir is not None:
+        plot_file, dedisp_script, notes = _scan_artifacts(run_dir)
+
     return DDplanResult(
         dm_low=float(dm_low),
         dm_high=float(dm_high),
         num_dms=total_dms,
-        freq_mhz=float(freq_mhz),
-        bw_mhz=float(bw_mhz),
-        num_channels=int(num_channels),
-        sample_time_us=float(sample_time_us),
+        freq_mhz=float(freq_mhz) if freq_mhz is not None else None,
+        bw_mhz=float(bw_mhz) if bw_mhz is not None else None,
+        num_channels=int(num_channels) if num_channels is not None else None,
+        sample_time_us=float(sample_time_us) if sample_time_us is not None else None,
+        input_file=input_file,
         passes=passes,
+        plot_file=plot_file,
+        dedisp_script=dedisp_script,
+        notes=notes,
     )

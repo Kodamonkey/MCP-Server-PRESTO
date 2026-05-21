@@ -25,7 +25,7 @@ _TXTCAND_ROW = re.compile(
 _TOP_N = 20
 
 
-def _parse_txtcand(txt: str) -> list[AccelCandidate]:
+def _parse_txtcand(txt: str, top_n: int) -> list[AccelCandidate]:
     out: list[AccelCandidate] = []
     for line in txt.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -50,7 +50,7 @@ def _parse_txtcand(txt: str) -> list[AccelCandidate]:
                 z=z,
             )
         )
-        if len(out) >= _TOP_N:
+        if len(out) >= top_n:
             break
     return out
 
@@ -62,12 +62,18 @@ def parse(
     zmax: int = 0,
     numharm: int = 0,
     input_fft: str = "",
+    wmax: int | None = None,
+    sigma: float | None = None,
+    ncpus: int | None = None,
+    candidate_limit: int | None = None,
 ) -> AccelsearchResult:
     if not isinstance(stdout, str):
         raise ParserError(f"stdout must be str, got {type(stdout).__name__}")
     if stdout.startswith(_BOM):
         stdout = stdout[1:]
 
+    top_n = candidate_limit if candidate_limit is not None else _TOP_N
+    notes: list[str] = []
     cand_count: int | None = None
     accel_cand_file: str | None = None
     txtcand_file: str | None = None
@@ -92,7 +98,7 @@ def parse(
                 txtcand_file = txt_hits[0].name
                 try:
                     txt = txt_hits[0].read_text(encoding="utf-8", errors="replace")
-                    top_cands = _parse_txtcand(txt)
+                    top_cands = _parse_txtcand(txt, top_n)
                     cand_count = sum(
                         1 for line in txt.splitlines()
                         if line.strip() and not line.lstrip().startswith("#")
@@ -101,12 +107,26 @@ def parse(
                 except OSError as e:
                     log.warning("failed to read txtcand %s: %s", txt_hits[0], e)
 
+    if (
+        candidate_limit is not None
+        and cand_count is not None
+        and cand_count > candidate_limit
+    ):
+        notes.append(
+            f"top_candidates capped at candidate_limit={candidate_limit} "
+            f"(cand_count={cand_count})"
+        )
+
     return AccelsearchResult(
         zmax=int(zmax),
         numharm=int(numharm),
         input_fft=input_fft,
+        wmax=wmax,
+        sigma=sigma,
+        ncpus=ncpus,
         accel_cand_file=accel_cand_file,
         accel_txtcand_file=txtcand_file,
         cand_count=cand_count,
         top_candidates=top_cands,
+        notes=notes,
     )

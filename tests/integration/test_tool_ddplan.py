@@ -80,3 +80,97 @@ def test_ddplan_rejects_inverted_range(settings: Settings) -> None:
             num_channels=512, sample_time_us=64.0,
             settings=settings,
         )
+
+
+def test_ddplan_parametric_requires_obs_params(settings: Settings) -> None:
+    backend = FakeDockerBackend()
+    with pytest.raises(PolicyViolationError, match="freq_mhz"):
+        run_ddplan(
+            backend=backend, dm_low=0.0, dm_high=50.0, settings=settings,
+        )
+
+
+def test_ddplan_input_file_mode_builds_positional_argv(settings: Settings) -> None:
+    (settings.data_dir / "obs.fil").write_bytes(b"FILTERBANK" * 4)
+    backend = FakeDockerBackend(
+        responses={"DDplan.py": FakeResponse(stdout=_STDOUT, status=RunStatus.SUCCESS)}
+    )
+    result = run_ddplan(
+        backend=backend,
+        dm_low=0.0, dm_high=50.0,
+        input_file="obs.fil",
+        settings=settings,
+    )
+    assert result.status == RunStatus.SUCCESS
+    argv = backend.calls[0].invocation.argv
+    assert "DDplan.py" in argv
+    assert "-l" in argv and "-d" in argv
+    assert "-f" not in argv  # not supplied -> DDplan infers from the file
+    assert argv[-1] == "/data/obs.fil"  # positional, never --input-file
+
+    m = load_manifest(settings.runs_dir / result.run_id)
+    assert m.container_inputs.get("input_file") == "/data/obs.fil"
+    assert result.result is not None
+    assert result.result.input_file == "obs.fil"
+
+
+def test_ddplan_write_dedisp_script_requires_input_file(settings: Settings) -> None:
+    backend = FakeDockerBackend()
+    with pytest.raises(PolicyViolationError, match="write_dedisp_script"):
+        run_ddplan(
+            backend=backend, dm_low=0.0, dm_high=50.0,
+            freq_mhz=1500.0, bw_mhz=300.0,
+            num_channels=512, sample_time_us=64.0,
+            write_dedisp_script=True, settings=settings,
+        )
+
+
+def test_ddplan_write_dedisp_script_capability_gated(settings: Settings) -> None:
+    (settings.data_dir / "obs.fil").write_bytes(b"FILTERBANK")
+    backend = FakeDockerBackend(
+        responses={"DDplan.py": FakeResponse(stdout=_STDOUT, status=RunStatus.SUCCESS)},
+        probe_responses={
+            "help:DDplan.py": FakeResponse(
+                status=RunStatus.SUCCESS,
+                stdout="Usage: DDplan.py [-l loDM] [-d hiDM] [-o plot]",
+            )
+        },
+    )
+    from presto_mcp.errors import DockerInvocationError
+
+    with pytest.raises(DockerInvocationError, match="-w"):
+        run_ddplan(
+            backend=backend, dm_low=0.0, dm_high=50.0,
+            input_file="obs.fil", write_dedisp_script=True, settings=settings,
+        )
+
+
+def test_ddplan_write_dedisp_script_when_supported(settings: Settings) -> None:
+    (settings.data_dir / "obs.fil").write_bytes(b"FILTERBANK")
+    backend = FakeDockerBackend(
+        responses={
+            "DDplan.py": FakeResponse(
+                stdout=_STDOUT,
+                status=RunStatus.SUCCESS,
+                artifacts={"dedisp_obs.py": b"# dedisp script\n"},
+            )
+        },
+        probe_responses={
+            "help:DDplan.py": FakeResponse(
+                status=RunStatus.SUCCESS,
+                stdout="Usage: DDplan.py [-l loDM] [-d hiDM] [-w write dedisp script]",
+            )
+        },
+    )
+    result = run_ddplan(
+        backend=backend, dm_low=0.0, dm_high=50.0,
+        input_file="obs.fil", write_dedisp_script=True, settings=settings,
+    )
+    assert result.status == RunStatus.SUCCESS
+    ddplan_call = next(
+        c for c in backend.calls
+        if "DDplan.py" in c.invocation.argv and "-h" not in c.invocation.argv
+    )
+    assert "-w" in ddplan_call.invocation.argv
+    assert result.result is not None
+    assert result.result.dedisp_script == "dedisp_obs.py"

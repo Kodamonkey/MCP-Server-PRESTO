@@ -13,13 +13,30 @@ import subprocess
 from pathlib import Path
 
 from ..config import Settings, find_cloud_placeholder_files, get_settings
-from ..models import EnvironmentCheck, EnvironmentCheckStatus, ValidateEnvironmentResult
+from ..docker_backend import BackendProtocol
+from ..models import (
+    EnvironmentCheck,
+    EnvironmentCheckStatus,
+    RuntimeCheckStatus,
+    RuntimeCompatibilityResult,
+    ToolReadiness,
+    ValidateEnvironmentResult,
+)
+from ..runtime_checks import collect_runtime_compatibility
 
 log = logging.getLogger("presto_mcp.tools.validate_environment")
 
 _DOCKER_PROBE_TIMEOUT_S = 5
 _IMAGE_PROBE_TIMEOUT_S = 10
 _STATUS_RANK: dict[EnvironmentCheckStatus, int] = {"OK": 0, "WARN": 1, "ERROR": 2}
+
+# Tool readiness is fail-open: an UNKNOWN probe must not turn into an ERROR.
+_RUNTIME_TO_ENV: dict[RuntimeCheckStatus, EnvironmentCheckStatus] = {
+    "OK": "OK",
+    "WARN": "WARN",
+    "ERROR": "ERROR",
+    "UNKNOWN": "WARN",
+}
 
 
 def _aggregate(checks: list[EnvironmentCheck]) -> EnvironmentCheckStatus:
@@ -287,10 +304,55 @@ def _check_policies(s: Settings) -> EnvironmentCheck:
     )
 
 
+def _readiness_to_check(r: ToolReadiness) -> EnvironmentCheck:
+    """Fold one ToolReadiness into an EnvironmentCheck for the flat report."""
+    status = _RUNTIME_TO_ENV[r.status]
+    if r.status == "OK":
+        return EnvironmentCheck(
+            name=f"tool_readiness.presto.{r.tool_name}",
+            status=status,
+            message="all runtime dependencies satisfied",
+        )
+    bad = [c for c in r.checks if c.status != "OK"]
+    detail = "; ".join(f"{c.name}={c.status}" for c in bad) or f"readiness={r.status}"
+    remediation = next((c.remediation for c in bad if c.remediation), None)
+    return EnvironmentCheck(
+        name=f"tool_readiness.presto.{r.tool_name}",
+        status=status,
+        message=detail,
+        remediation=remediation,
+    )
+
+
+def _collect_runtime_compat(
+    s: Settings,
+    backend: BackendProtocol | None,
+    force_refresh: bool,
+) -> RuntimeCompatibilityResult | None:
+    """Probe image capabilities + per-tool readiness. Never raises."""
+    b = backend
+    if b is None:
+        try:
+            from ..docker_backend import DockerBackend
+
+            b = DockerBackend()
+        except Exception as e:  # noqa: BLE001
+            log.warning("cannot build docker backend for tool readiness: %s", e)
+            return None
+    try:
+        return collect_runtime_compatibility(b, s, force_refresh=force_refresh)
+    except Exception as e:  # noqa: BLE001
+        log.warning("runtime compatibility collection failed: %s", e)
+        return None
+
+
 def run_validate_environment(
     *,
     check_image: bool = True,
+    include_tool_readiness: bool = False,
+    force_refresh: bool = False,
     settings: Settings | None = None,
+    backend: BackendProtocol | None = None,
 ) -> ValidateEnvironmentResult:
     checks: list[EnvironmentCheck] = []
 
@@ -318,7 +380,34 @@ def run_validate_environment(
 
     checks.append(_check_policies(s))
 
-    return ValidateEnvironmentResult(status=_aggregate(checks), checks=checks)
+    runtime_compat: RuntimeCompatibilityResult | None = None
+    if include_tool_readiness:
+        if docker is not None and daemon_ok:
+            runtime_compat = _collect_runtime_compat(s, backend, force_refresh)
+        if runtime_compat is not None:
+            for r in runtime_compat.tool_readiness:
+                checks.append(_readiness_to_check(r))
+        else:
+            checks.append(
+                EnvironmentCheck(
+                    name="tool_readiness",
+                    status="WARN",
+                    message=(
+                        "tool readiness not probed (Docker daemon or PRESTO "
+                        "image unavailable)"
+                    ),
+                    remediation=(
+                        "Ensure Docker is running and the PRESTO image is pulled, "
+                        "then re-run with include_tool_readiness=true."
+                    ),
+                )
+            )
+
+    return ValidateEnvironmentResult(
+        status=_aggregate(checks),
+        checks=checks,
+        runtime_compatibility=runtime_compat,
+    )
 
 
 __all__ = ["run_validate_environment"]

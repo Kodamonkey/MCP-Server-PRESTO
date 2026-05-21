@@ -29,6 +29,14 @@ def pytest_collection_modifyitems(
             item.add_marker(skipper)
 
 
+@pytest.fixture(autouse=True)
+def _clear_runtime_cache() -> None:
+    """Runtime-capability probes are cached per image; isolate every test."""
+    from presto_mcp.runtime_checks import clear_runtime_cache
+
+    clear_runtime_cache()
+
+
 @pytest.fixture
 def stdout_fixture_dir() -> Path:
     """Directory containing real PRESTO stdout captures."""

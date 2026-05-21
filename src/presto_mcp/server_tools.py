@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
@@ -16,6 +16,9 @@ from .config import Settings
 from .docker_backend import BackendProtocol
 from .models import (
     AccelsearchResult,
+    BinaryInfoResult,
+    CandidateReportPdfResult,
+    ComparePeriodsResult,
     DDplanResult,
     DownsampleFilterbankResult,
     FbTruncateResult,
@@ -40,7 +43,9 @@ from .models import (
     RunSummary,
     SearchBinResult,
     SiftingResult,
+    SimpleZapbirdsResult,
     SinglePulseSearchResult,
+    StackSearchResult,
     SumProfilesResult,
     ToolRunResult,
     ValidateEnvironmentResult,
@@ -50,6 +55,9 @@ from .models import (
 )
 from .tools import list_runs as list_runs_tool
 from .tools.accelsearch import run_accelsearch
+from .tools.binary_info import run_binary_info
+from .tools.compare_periods import run_compare_periods
+from .tools.compile_candidate_report_pdf import run_compile_candidate_report_pdf
 from .tools.ddplan import run_ddplan
 from .tools.downsample_filterbank import run_downsample_filterbank
 from .tools.fb_truncate import run_fb_truncate
@@ -70,7 +78,9 @@ from .tools.rfifind_stats import run_rfifind_stats
 from .tools.rrattrap import run_rrattrap
 from .tools.search_bin import run_search_bin
 from .tools.sifting import run_sifting
+from .tools.simple_zapbirds import run_simple_zapbirds
 from .tools.single_pulse_search import run_single_pulse_search
+from .tools.stacksearch import run_stacksearch
 from .tools.sum_profiles import run_sum_profiles
 from .tools.summarize_run import inspect_artifacts as _inspect_artifacts
 from .tools.summarize_run import summarize_run as _summarize_run
@@ -276,23 +286,60 @@ def register_tools(
         name="presto.ddplan",
         description=(
             "Run PRESTO 'DDplan.py' inside Docker to compute an optimal DM-trial "
-            "plan. Pure compute (no data input). Returns a list of passes "
-            "(low_dm, dm_step, num_dms, downsamp) for use with presto.prepsubband."
+            "plan. Returns a list of passes (low_dm, dm_step, num_dms, downsamp) "
+            "for use with presto.prepsubband. Two modes: (a) parametric — give "
+            "freq_mhz/bw_mhz/num_channels/sample_time_us explicitly; (b) supply "
+            "input_file (a raw filterbank/PSRFITS path relative to DATA_DIR, or a "
+            "'<run_id>/artifacts/<file>') so DDplan.py infers the observation "
+            "parameters from it. Any explicit params override file-derived "
+            "values. write_dedisp_script=true emits a dedisp_*.py script and "
+            "requires input_file (capability-gated against DDplan.py -h)."
         ),
     )
     async def presto_ddplan(
         dm_low: Annotated[float, Field(ge=0.0, le=10_000.0, description="Lowest DM to plan.")],
         dm_high: Annotated[float, Field(ge=0.0, le=10_000.0, description="Highest DM to plan.")],
-        freq_mhz: Annotated[float, Field(gt=0.0, description="Center frequency (MHz).")],
-        bw_mhz: Annotated[float, Field(gt=0.0, description="Total bandwidth (MHz).")],
-        num_channels: Annotated[int, Field(ge=1, le=4096, description="Number of frequency channels.")],
+        freq_mhz: Annotated[
+            float | None,
+            Field(default=None, gt=0.0, description="Center frequency (MHz)."),
+        ] = None,
+        bw_mhz: Annotated[
+            float | None,
+            Field(default=None, gt=0.0, description="Total bandwidth (MHz)."),
+        ] = None,
+        num_channels: Annotated[
+            int | None,
+            Field(default=None, ge=1, le=4096, description="Number of frequency channels."),
+        ] = None,
         sample_time_us: Annotated[
-            float,
-            Field(gt=0.0, description="Native sample time in microseconds."),
-        ],
+            float | None,
+            Field(default=None, gt=0.0, description="Native sample time in microseconds."),
+        ] = None,
         num_subbands: Annotated[
             int | None,
             Field(default=None, ge=1, le=4096, description="Optional number of subbands."),
+        ] = None,
+        input_file: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Optional raw filterbank/PSRFITS file. Either relative to "
+                    "DATA_DIR or '<run_id>/artifacts/<file>'. Mounted read-only "
+                    "and appended as DDplan.py's positional argument."
+                ),
+            ),
+        ] = None,
+        write_dedisp_script: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="Emit a dedisp_*.py script (DDplan.py -w). Requires input_file.",
+            ),
+        ] = False,
+        output_prefix: Annotated[
+            str | None,
+            Field(default=None, description="Output filename prefix. Defaults to 'ddplan'."),
         ] = None,
         background: Annotated[
             bool,
@@ -309,6 +356,9 @@ def register_tools(
             num_channels=num_channels,
             sample_time_us=sample_time_us,
             num_subbands=num_subbands,
+            input_file=input_file,
+            write_dedisp_script=write_dedisp_script,
+            output_prefix=output_prefix,
             settings=_settings_for_tools(),
             background=background,
         )
@@ -399,7 +449,11 @@ def register_tools(
             "Run PRESTO 'accelsearch' inside Docker for Fourier / acceleration "
             "candidate search on a .fft (from a prior realfft run). Produces "
             "ACCEL_<zmax> + .txtcand artifacts and a typed top-N candidate list. "
-            "input_file is interpreted relative to RUNS_DIR."
+            "input_file is interpreted relative to RUNS_DIR. Advanced flags "
+            "(wmax jerk search, sigma cutoff, ncpus) are capability-checked "
+            "against 'accelsearch -h' first; if the image's accelsearch lacks a "
+            "requested flag the call fails with a clear error rather than "
+            "silently dropping it. candidate_limit only caps the parsed top-N."
         ),
     )
     async def presto_accelsearch(
@@ -415,6 +469,42 @@ def register_tools(
             int,
             Field(default=8, description="Number of harmonics to sum (1,2,4,8,16,32)."),
         ] = 8,
+        wmax: Annotated[
+            int | None,
+            Field(
+                default=None,
+                ge=0,
+                le=1200,
+                description="Max Fourier w for a jerk search (image-dependent flag).",
+            ),
+        ] = None,
+        sigma: Annotated[
+            float | None,
+            Field(
+                default=None,
+                ge=1.0,
+                le=30.0,
+                description="Candidate sigma cutoff (image-dependent flag).",
+            ),
+        ] = None,
+        ncpus: Annotated[
+            int | None,
+            Field(
+                default=None,
+                ge=1,
+                le=64,
+                description="OpenMP CPU count (image-dependent flag).",
+            ),
+        ] = None,
+        candidate_limit: Annotated[
+            int | None,
+            Field(
+                default=None,
+                ge=1,
+                le=1000,
+                description="Cap the parsed top_candidates list (does not change the search).",
+            ),
+        ] = None,
         background: Annotated[
             bool,
             Field(default=False, description="Return RUNNING; poll get_run_manifest."),
@@ -426,6 +516,10 @@ def register_tools(
             backend=_backend_for_tools(),
             zmax=zmax,
             numharm=numharm,
+            wmax=wmax,
+            sigma=sigma,
+            ncpus=ncpus,
+            candidate_limit=candidate_limit,
             settings=_settings_for_tools(),
             background=background,
         )
@@ -620,10 +714,13 @@ def register_tools(
     @mcp.tool(
         name="presto.rrattrap",
         description=(
-            "Run PRESTO 'rrattrap.py' inside Docker to group single-pulse events "
+            "[experimental / image-dependent] Run PRESTO 'rrattrap.py' inside Docker "
+            "to group single-pulse events "
             "from one or more .singlepulse files (from prior single_pulse_search "
             "runs) plus the .inf header. Writes groups.txt into the run's "
-            "artifacts/. All inputs are '<run_id>/artifacts/...' relative to RUNS_DIR."
+            "artifacts/. All inputs are '<run_id>/artifacts/...' relative to RUNS_DIR. "
+            "Requires `rrattrap.py` in PATH and `presto.singlepulse` importable "
+            "inside the configured PRESTO image."
         ),
     )
     async def presto_rrattrap(
@@ -1167,6 +1264,227 @@ def register_tools(
         )
 
 
+    @mcp.tool(
+        name="presto.stacksearch",
+        description=(
+            "[experimental / image-dependent] Run PRESTO 'stacksearch.py' inside "
+            "Docker to stack-search several .fft files (each from a prior realfft "
+            "run) and boost weak periodic signals. Requires stacksearch.py in the "
+            "PRESTO image — a readiness preflight fails fast with a controlled "
+            "error otherwise. Verify with presto.validate_environment "
+            "(include_tool_readiness=true) first. Inputs are "
+            "'<run_id>/artifacts/<file>.fft' relative to RUNS_DIR."
+        ),
+    )
+    async def presto_stacksearch(
+        fft_files: Annotated[
+            list[str],
+            Field(
+                description="List of <run_id>/artifacts/<file>.fft (min 2).",
+                min_length=2,
+                max_length=256,
+            ),
+        ],
+        background: Annotated[
+            bool,
+            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+        ] = False,
+    ) -> ToolRunResult[StackSearchResult]:
+        return await asyncio.to_thread(
+            run_stacksearch,
+            fft_files,
+            backend=_backend_for_tools(),
+            settings=_settings_for_tools(),
+            background=background,
+        )
+
+
+    @mcp.tool(
+        name="presto.simple_zapbirds",
+        description=(
+            "[experimental / image-dependent] Run PRESTO 'simple_zapbirds.py' "
+            "inside Docker to zap known interference ('birdies') out of a .fft. "
+            "The source .fft (a prior realfft artifact) is COPIED into the new "
+            "run's artifacts/ and the zap runs on the copy — the source is never "
+            "modified in place. fft_file is '<run_id>/artifacts/<file>.fft' "
+            "relative to RUNS_DIR; birds_file is relative to DATA_DIR or a "
+            "'<run_id>/artifacts/<file>'. Verify availability with "
+            "presto.validate_environment first."
+        ),
+    )
+    async def presto_simple_zapbirds(
+        fft_file: Annotated[
+            str,
+            Field(description="<run_id>/artifacts/<file>.fft relative to RUNS_DIR."),
+        ],
+        birds_file: Annotated[
+            str,
+            Field(
+                description=(
+                    "Birds/zap file: relative to DATA_DIR or "
+                    "'<run_id>/artifacts/<file>'."
+                ),
+            ),
+        ],
+        background: Annotated[
+            bool,
+            Field(default=False, description="Return RUNNING; poll get_run_manifest."),
+        ] = False,
+    ) -> ToolRunResult[SimpleZapbirdsResult]:
+        return await asyncio.to_thread(
+            run_simple_zapbirds,
+            fft_file,
+            birds_file,
+            backend=_backend_for_tools(),
+            settings=_settings_for_tools(),
+            background=background,
+        )
+
+
+    @mcp.tool(
+        name="presto.compare_periods",
+        description=(
+            "Utility tool (no Docker): cross-check a candidate spin period "
+            "against one or more pulsar ephemeris (.par) files. Reports matches "
+            "to each pulsar's period and its harmonics / subharmonics with a "
+            "confidence label (exact/near/weak). Use this for known-pulsar "
+            "cross-checks — it never asserts a scientific detection. par_files "
+            "are relative to DATA_DIR or '<run_id>/artifacts/<file>'."
+        ),
+    )
+    async def presto_compare_periods(
+        period_ms: Annotated[
+            float,
+            Field(gt=0.0, description="Candidate spin period in milliseconds."),
+        ],
+        par_files: Annotated[
+            list[str],
+            Field(
+                description="Ephemeris .par files (DATA_DIR or run artifacts).",
+                min_length=1,
+                max_length=256,
+            ),
+        ],
+        tolerance: Annotated[
+            float | None,
+            Field(
+                default=None,
+                gt=0.0,
+                le=0.5,
+                description="Relative match tolerance (default 1e-3).",
+            ),
+        ] = None,
+        max_harmonic: Annotated[
+            int | None,
+            Field(
+                default=None,
+                ge=1,
+                le=64,
+                description="Highest harmonic / subharmonic to test (default 8).",
+            ),
+        ] = None,
+    ) -> ComparePeriodsResult:
+        return await asyncio.to_thread(
+            run_compare_periods,
+            period_ms,
+            par_files,
+            tolerance=tolerance,
+            max_harmonic=max_harmonic,
+            settings=_settings_for_tools(),
+        )
+
+
+    @mcp.tool(
+        name="presto.binary_info",
+        description=(
+            "Utility tool (no Docker): summarise the orbital parameters of a "
+            "binary-pulsar ephemeris (.par) file — orbital period, projected "
+            "semi-major axis, eccentricity — and derive the line-of-sight "
+            "velocity amplitude plus the Doppler-smeared spin period / frequency "
+            "range an acceleration search must cover. par_file is relative to "
+            "DATA_DIR or '<run_id>/artifacts/<file>'."
+        ),
+    )
+    async def presto_binary_info(
+        par_file: Annotated[
+            str,
+            Field(description="Ephemeris .par file (DATA_DIR or run artifact)."),
+        ],
+        inf_file: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Optional companion .inf file (DATA_DIR or run artifact).",
+            ),
+        ] = None,
+    ) -> BinaryInfoResult:
+        return await asyncio.to_thread(
+            run_binary_info,
+            par_file,
+            inf_file=inf_file,
+            settings=_settings_for_tools(),
+        )
+
+
+    @mcp.tool(
+        name="presto.compile_candidate_report_pdf",
+        description=(
+            "Utility tool (no Docker): bundle PNG/JPG plot artifacts from one or "
+            "more runs into a single reviewable PDF, written to a fresh "
+            "runs/<run_id>/artifacts/ directory. Reads only artifacts under "
+            "runs/ (never data/, never absolute paths). Corrupt images are "
+            "listed in skipped_artifacts and skipped; duplicate images (same "
+            "content) are collapsed; page order is deterministic. Provide "
+            "run_ids and/or explicit artifact_paths."
+        ),
+    )
+    async def presto_compile_candidate_report_pdf(
+        run_ids: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description="Run IDs whose artifacts/ images should be included.",
+            ),
+        ] = None,
+        artifact_paths: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description="Explicit '<run_id>/artifacts/<file>' image paths.",
+            ),
+        ] = None,
+        include_patterns: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description="Glob patterns to include. Defaults to *.png/*.jpg/*.jpeg.",
+            ),
+        ] = None,
+        title: Annotated[
+            str | None,
+            Field(default=None, description="Optional title page text."),
+        ] = None,
+        output_prefix: Annotated[
+            str | None,
+            Field(default=None, description="PDF filename prefix. Defaults to 'candidate_report'."),
+        ] = None,
+        sort_by: Annotated[
+            Literal["run_id_name", "mtime", "name"],
+            Field(default="run_id_name", description="Deterministic page ordering."),
+        ] = "run_id_name",
+    ) -> ToolRunResult[CandidateReportPdfResult]:
+        return await asyncio.to_thread(
+            run_compile_candidate_report_pdf,
+            run_ids=run_ids,
+            artifact_paths=artifact_paths,
+            include_patterns=include_patterns,
+            title=title,
+            output_prefix=output_prefix,
+            sort_by=sort_by,
+            settings=_settings_for_tools(),
+        )
+
+
     # --- Utility tools (no PRESTO execution) --------------------------------------
 
 
@@ -1208,8 +1526,12 @@ def register_tools(
         description=(
             "Structured local-environment diagnostic. Checks settings, data/runs/"
             "outputs/logs directories, docker CLI presence and (optionally) the "
-            "PRESTO image, plus policy sanity (cpus, memory_mb, timeout_s). Never "
-            "executes PRESTO. Each check returns OK/WARN/ERROR with remediation."
+            "PRESTO image, plus policy sanity (cpus, memory_mb, timeout_s). When "
+            "include_tool_readiness=true it also probes the PRESTO image for each "
+            "tool's binaries / python modules and reports per-tool readiness "
+            "(e.g. presto.rrattrap needs the importable module presto.singlepulse). "
+            "Never executes real PRESTO work. Each check returns OK/WARN/ERROR/"
+            "UNKNOWN with remediation. Call this first in any session."
         ),
     )
     async def presto_validate_environment(
@@ -1220,10 +1542,30 @@ def register_tools(
                 description="If true, also run 'docker image inspect <PRESTO_IMAGE>'.",
             ),
         ] = True,
+        include_tool_readiness: Annotated[
+            bool,
+            Field(
+                default=True,
+                description=(
+                    "If true, probe the PRESTO image with lightweight Docker "
+                    "commands and report per-tool readiness. Results are cached "
+                    "per image for ~15 min."
+                ),
+            ),
+        ] = True,
+        force_refresh: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="If true, bypass the runtime-capability cache.",
+            ),
+        ] = False,
     ) -> ValidateEnvironmentResult:
         return await asyncio.to_thread(
             run_validate_environment,
             check_image=check_image,
+            include_tool_readiness=include_tool_readiness,
+            force_refresh=force_refresh,
             settings=_settings_for_tools(),
         )
 

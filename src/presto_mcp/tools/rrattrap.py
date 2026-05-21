@@ -15,14 +15,46 @@ from pathlib import Path
 
 from ..config import Settings, get_settings
 from ..docker_backend import BackendProtocol
-from ..errors import PathSecurityError
+from ..errors import DockerInvocationError, PathSecurityError
 from ..executor import RunSpec, execute
 from ..models import RrattrapResult, ToolRunResult
 from ..parsers import rrattrap_parser
 from ..path_security import resolve_run_artifact
 from ..policies import check_rrattrap_input_count
+from ..runtime_checks import get_tool_readiness
 
 log = logging.getLogger("presto_mcp.tools.rrattrap")
+
+
+def _check_rrattrap_runtime_dependencies(backend: BackendProtocol, s: Settings) -> None:
+    """Pre-flight check for image-dependent rrattrap runtime requirements.
+
+    rrattrap.py imports the internal module ``presto.singlepulse``; the pinned
+    image is known to ship the script without an importable module. Rather than
+    let ``rrattrap.py`` fail with a confusing traceback, we resolve readiness
+    via :mod:`presto_mcp.runtime_checks` and fail fast with a controlled,
+    actionable error. An inconclusive (UNKNOWN) probe is fail-open: a transient
+    Docker hiccup must not permanently block the tool.
+    """
+    readiness = get_tool_readiness(backend, s, "rrattrap")
+    if not readiness.blocking:
+        return
+
+    detail = "; ".join(
+        f"{c.name}={c.status}" for c in readiness.checks if c.status != "OK"
+    )
+    raise DockerInvocationError(
+        "Cannot run presto.rrattrap with the configured PRESTO image.\n\n"
+        "The MCP tool presto.rrattrap exists, and the image may even contain "
+        "the rrattrap.py script, but a required runtime dependency is missing — "
+        "typically the internal Python module `presto.singlepulse`, which "
+        "rrattrap.py imports.\n\n"
+        "This is a PRESTO Docker image/runtime issue, not an MCP tool issue.\n"
+        "Run presto.validate_environment (include_tool_readiness=true) for the "
+        "full readiness report, then use a compatible PRESTO image or skip "
+        "rrattrap for this runtime.\n\n"
+        f"Readiness detail: {detail or 'rrattrap dependencies unavailable'}"
+    )
 
 
 def run_rrattrap(
@@ -40,6 +72,7 @@ def run_rrattrap(
     All inputs are ``<run_id>/artifacts/<file>`` relative to ``RUNS_DIR``.
     """
     s = settings or get_settings()
+    _check_rrattrap_runtime_dependencies(backend, s)
     check_rrattrap_input_count(len(singlepulse_files))
 
     host_sp: list[Path] = []

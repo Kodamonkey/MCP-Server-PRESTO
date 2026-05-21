@@ -6,6 +6,10 @@ Replaces the real backend in unit/integration tests. Honors the
 Behaviors:
 
 * Returns canned stdout/stderr/exit_code keyed by tool-name OR by a custom hook.
+* Capability probes (``which X``, ``python3 -c "import ..."``, ``X -h``) collide
+  under plain tool-name keying, so they are matched first against
+  ``probe_responses`` using a composite key: ``which:<name>`` / ``module:<name>``
+  / ``help:<name>``.
 * Optionally drops a file (or set of files) into ``run_dir/artifacts`` to
   simulate PRESTO writing outputs at ``/outputs/...`` inside the container.
 * Records every invocation for assertion.
@@ -13,12 +17,34 @@ Behaviors:
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from presto_mcp.models import BackendResult, DockerInvocation, RunStatus
+
+
+def probe_key(post_image_argv: tuple[str, ...]) -> str | None:
+    """Map a probe argv (everything after the image) to a composite probe key.
+
+    Returns ``which:<name>`` / ``module:<name>`` / ``help:<name>`` or None when
+    the argv is not a recognised runtime-capability probe.
+    """
+    if len(post_image_argv) == 2 and post_image_argv[0] == "which":
+        return f"which:{post_image_argv[1]}"
+    if len(post_image_argv) == 2 and post_image_argv[1] == "-h":
+        return f"help:{post_image_argv[0]}"
+    if (
+        len(post_image_argv) >= 3
+        and post_image_argv[0] == "python3"
+        and post_image_argv[1] == "-c"
+    ):
+        m = re.search(r"find_spec\(['\"]([^'\"]+)['\"]\)", post_image_argv[2])
+        if m:
+            return f"module:{m.group(1)}"
+    return None
 
 
 @dataclass
@@ -45,13 +71,22 @@ class FakeResponse:
 class FakeDockerBackend:
     """Drop-in BackendProtocol implementation. No subprocess, no network."""
 
-    def __init__(self, responses: dict[str, FakeResponse] | None = None) -> None:
+    def __init__(
+        self,
+        responses: dict[str, FakeResponse] | None = None,
+        probe_responses: dict[str, FakeResponse] | None = None,
+    ) -> None:
         self.responses: dict[str, FakeResponse] = responses or {}
+        self.probe_responses: dict[str, FakeResponse] = probe_responses or {}
         self.calls: list[FakeBackendCall] = []
         self.digest: str | None = "sha256:fakedigest1234567890"
 
     def set_response(self, tool: str, response: FakeResponse) -> None:
         self.responses[tool] = response
+
+    def set_probe_response(self, key: str, response: FakeResponse) -> None:
+        """Set a capability-probe response. ``key`` is which:/module:/help:<name>."""
+        self.probe_responses[key] = response
 
     def run(self, invocation: DockerInvocation, timeout_s: int) -> BackendResult:
         self.calls.append(FakeBackendCall(invocation=invocation, timeout_s=timeout_s))
@@ -59,8 +94,14 @@ class FakeDockerBackend:
         # invocation.argv = ["docker","run","--rm",...,"<image>","<presto_binary>",...]
         image_idx = invocation.argv.index(invocation.image)
         tool = invocation.argv[image_idx + 1]
+        post_image = tuple(invocation.argv[image_idx + 1 :])
 
-        resp = self.responses.get(tool, FakeResponse())
+        # Capability probes win over plain tool-name keying.
+        pkey = probe_key(post_image)
+        if pkey is not None and pkey in self.probe_responses:
+            resp = self.probe_responses[pkey]
+        else:
+            resp = self.responses.get(tool, FakeResponse())
 
         # Find run_dir from the second --mount (the rw one).
         run_dir: Path | None = None

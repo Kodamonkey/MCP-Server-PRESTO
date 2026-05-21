@@ -66,6 +66,20 @@ from presto_mcp import prompts
             ["presto.list_runs", "presto.get_run_manifest", "presto.summarize_run"],
         ),
         (
+            prompts.build_candidate_review_plan,
+            (None,),
+            [
+                "presto.list_runs",
+                "presto.summarize_run",
+                "presto.inspect_artifacts",
+                "presto.pfd2png",
+                "presto.waterfaller",
+                "presto.compare_periods",
+                "presto.binary_info",
+                "presto.compile_candidate_report_pdf",
+            ],
+        ),
+        (
             prompts.build_prepare_filterbank_plan,
             ("data/obs.fits",),
             [
@@ -152,6 +166,7 @@ def test_all_builders_include_disclaimer() -> None:
         prompts.build_fold_known_candidate_plan("x", 1.0, 1.0),
         prompts.build_explain_failed_run("20260516T143052Z-K7QM3A"),
         prompts.build_generate_candidate_report_plan(None),
+        prompts.build_candidate_review_plan(None),
         prompts.build_prepare_filterbank_plan("x"),
         prompts.build_rfi_mitigation_plan("x"),
         prompts.build_fold_qc_plan("x"),
@@ -164,6 +179,22 @@ def test_all_builders_include_disclaimer() -> None:
         assert "does not auto-execute" in text.lower()
 
 
+def test_search_plans_carry_guardrails() -> None:
+    sp = prompts.build_single_pulse_search_plan("x")
+    pp = prompts.build_periodic_search_plan("x")
+    cr = prompts.build_candidate_review_plan(None)
+    for text in (sp, pp, cr):
+        assert "presto.validate_environment" in text
+        assert "taxonomy" in text.lower()
+        assert "detection" in text.lower()
+    # periodic plan must flag the image-dependent wmax flag
+    assert "wmax" in pp
+    # single-pulse plan must gate rrattrap on readiness
+    assert "presto.singlepulse" in sp
+    # candidate review must refuse unilateral scientific confirmation
+    assert "human" in cr.lower()
+
+
 def test_builders_are_pure_functions() -> None:
     # No async, no generators — pure synchronous string builders.
     for name in (
@@ -173,6 +204,7 @@ def test_builders_are_pure_functions() -> None:
         "build_fold_known_candidate_plan",
         "build_explain_failed_run",
         "build_generate_candidate_report_plan",
+        "build_candidate_review_plan",
         "build_prepare_filterbank_plan",
         "build_rfi_mitigation_plan",
         "build_fold_qc_plan",

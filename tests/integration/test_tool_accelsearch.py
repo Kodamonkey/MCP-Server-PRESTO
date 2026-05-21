@@ -7,11 +7,20 @@ from pathlib import Path
 import pytest
 
 from presto_mcp.config import Settings
-from presto_mcp.errors import PathSecurityError, PolicyViolationError
+from presto_mcp.errors import (
+    DockerInvocationError,
+    PathSecurityError,
+    PolicyViolationError,
+)
 from presto_mcp.manifest import load_manifest
 from presto_mcp.models import RunStatus
 from presto_mcp.tools.accelsearch import run_accelsearch
 from tests.fakes.fake_docker_backend import FakeDockerBackend, FakeResponse
+
+_HELP_WITH_ADVANCED = (
+    "Usage: accelsearch [-zmax z] [-numharm h] [-wmax w] [-sigma s] [-ncpus n]"
+)
+_HELP_BASIC = "Usage: accelsearch [-zmax z] [-numharm h]"
 
 PRIOR_RUN_ID = "20260517T120000Z-BBBBBB"
 
@@ -94,4 +103,76 @@ def test_accelsearch_rejects_non_fft(settings: Settings) -> None:
         run_accelsearch(
             f"{PRIOR_RUN_ID}/artifacts/prep.dat",
             backend=backend, settings=settings,
+        )
+
+
+def test_accelsearch_advanced_flags_when_supported(settings: Settings) -> None:
+    backend = FakeDockerBackend(
+        responses={
+            "accelsearch": FakeResponse(
+                stdout="searching...\n",
+                status=RunStatus.SUCCESS,
+                artifacts={"prep_ACCEL_200": b"X"},
+            )
+        },
+        probe_responses={
+            "help:accelsearch": FakeResponse(
+                status=RunStatus.SUCCESS, stdout=_HELP_WITH_ADVANCED
+            )
+        },
+    )
+    result = run_accelsearch(
+        f"{PRIOR_RUN_ID}/artifacts/prep.fft",
+        backend=backend, zmax=200, numharm=8,
+        wmax=50, sigma=3.0, ncpus=2, settings=settings,
+    )
+    assert result.status == RunStatus.SUCCESS
+    run_call = next(
+        c for c in backend.calls
+        if "accelsearch" in c.invocation.argv and "-h" not in c.invocation.argv
+    )
+    argv = run_call.invocation.argv
+    assert "-wmax" in argv and "50" in argv
+    assert "-sigma" in argv and "3.0" in argv
+    assert "-ncpus" in argv and "2" in argv
+    assert result.result is not None
+    assert result.result.wmax == 50
+
+
+def test_accelsearch_wmax_rejected_when_unsupported(settings: Settings) -> None:
+    backend = FakeDockerBackend(
+        probe_responses={
+            "help:accelsearch": FakeResponse(
+                status=RunStatus.SUCCESS, stdout=_HELP_BASIC
+            )
+        },
+    )
+    with pytest.raises(DockerInvocationError, match="-wmax"):
+        run_accelsearch(
+            f"{PRIOR_RUN_ID}/artifacts/prep.fft",
+            backend=backend, wmax=50, settings=settings,
+        )
+
+
+def test_accelsearch_no_help_probe_without_advanced_flags(settings: Settings) -> None:
+    backend = FakeDockerBackend(
+        responses={
+            "accelsearch": FakeResponse(stdout="ok\n", status=RunStatus.SUCCESS)
+        }
+    )
+    run_accelsearch(
+        f"{PRIOR_RUN_ID}/artifacts/prep.fft",
+        backend=backend, zmax=200, numharm=8, settings=settings,
+    )
+    # no advanced flags -> no `accelsearch -h` capability probe
+    assert all("-h" not in c.invocation.argv for c in backend.calls)
+
+
+@pytest.mark.parametrize("bad", [-1, 9999])
+def test_accelsearch_rejects_bad_wmax(settings: Settings, bad: int) -> None:
+    backend = FakeDockerBackend()
+    with pytest.raises(PolicyViolationError):
+        run_accelsearch(
+            f"{PRIOR_RUN_ID}/artifacts/prep.fft",
+            backend=backend, wmax=bad, settings=settings,
         )

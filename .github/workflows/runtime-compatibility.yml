@@ -1,0 +1,29 @@
+name: Runtime compatibility
+
+# Manual only. Unit tests can pass while the real PRESTO image is missing
+# binaries — this workflow probes the actual image. A scheduled nightly is
+# intentionally NOT enabled yet; add a cron later once the image is stable.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: Probe PRESTO image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - name: Pull PRESTO image
+        run: docker pull alex88ridolfi/presto5:png
+      - run: uv sync --extra dev
+      - name: Probe runtime capabilities
+        run: uv run python scripts/runtime_compat_report.py
+      - name: Upload runtime compatibility report
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-compatibility
+          path: |
+            runtime_compatibility.json
+            tool_readiness.md

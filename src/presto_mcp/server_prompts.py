@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .prompts import (
+    build_candidate_review_plan,
     build_explain_failed_run,
     build_fold_known_candidate_plan,
     build_fold_qc_plan,
@@ -58,6 +59,10 @@ def _prompt_explain_failed_run(run_id: str) -> str:
 
 def _prompt_generate_candidate_report_plan(run_id: str | None = None) -> str:
     return build_generate_candidate_report_plan(run_id)
+
+
+def _prompt_candidate_review_plan(run_id: str | None = None) -> str:
+    return build_candidate_review_plan(run_id)
 
 
 def _prompt_prepare_filterbank_plan(input_file: str, goal: str | None = None) -> str:
@@ -140,6 +145,16 @@ def register_prompts(mcp: Any) -> None:
             "detection; does not assert scientific confirmations."
         ),
     )(_prompt_generate_candidate_report_plan)
+    mcp.prompt(
+        name="presto.candidate_review_plan",
+        description=(
+            "Improved candidate-review workflow: summarize_run -> "
+            "inspect_artifacts -> pfd2png/waterfaller -> compare_periods -> "
+            "binary_info -> compile_candidate_report_pdf. Enforces the artifact / "
+            "noise / candidate / detection taxonomy and refuses to confirm "
+            "detections without human or external validation."
+        ),
+    )(_prompt_candidate_review_plan)
     mcp.prompt(
         name="presto.prepare_filterbank_plan",
         description=(

@@ -143,11 +143,17 @@ class DDplanResult(BaseModel):
     dm_low: float
     dm_high: float
     num_dms: int
-    freq_mhz: float
-    bw_mhz: float
-    num_channels: int
-    sample_time_us: float
+    # Observation params are None in input_file mode (DDplan derives them from
+    # the raw file) unless the caller also passed them explicitly.
+    freq_mhz: float | None = None
+    bw_mhz: float | None = None
+    num_channels: int | None = None
+    sample_time_us: float | None = None
+    input_file: str | None = None
     passes: list[DDplanPass] = Field(default_factory=list)
+    plot_file: str | None = None
+    dedisp_script: str | None = None
+    notes: list[str] = Field(default_factory=list)
 
 
 class PrepsubbandResult(BaseModel):
@@ -180,10 +186,14 @@ class AccelsearchResult(BaseModel):
     zmax: int
     numharm: int
     input_fft: str
+    wmax: int | None = None  # jerk-search w, when supported by the image
+    sigma: float | None = None
+    ncpus: int | None = None
     accel_cand_file: str | None = None
     accel_txtcand_file: str | None = None
     cand_count: int | None = None
     top_candidates: list[AccelCandidate] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 class SinglePulseSearchResult(BaseModel):
@@ -339,9 +349,54 @@ class EnvironmentCheck(BaseModel):
     remediation: str | None = None
 
 
+# -- Runtime capability / readiness layer ---------------------------------------
+
+RuntimeCheckStatus = Literal["OK", "WARN", "ERROR", "UNKNOWN"]
+
+
+class RuntimeCheck(BaseModel):
+    """One capability probe against the configured PRESTO Docker image."""
+
+    name: str
+    kind: Literal["binary", "python_module", "help", "flag"]
+    status: RuntimeCheckStatus
+    message: str
+    remediation: str | None = None
+    raw_output: str | None = None  # clipped probe stdout/stderr excerpt
+
+
+class PrestoRuntimeCapabilities(BaseModel):
+    """Snapshot of what the PRESTO image provides (binaries + python modules)."""
+
+    image: str
+    checked_at: datetime
+    from_cache: bool = False
+    binaries: list[RuntimeCheck] = Field(default_factory=list)
+    python_modules: list[RuntimeCheck] = Field(default_factory=list)
+
+
+class ToolReadiness(BaseModel):
+    """Whether one MCP tool's runtime dependencies are satisfied by the image."""
+
+    tool_name: str
+    status: RuntimeCheckStatus
+    checks: list[RuntimeCheck] = Field(default_factory=list)
+    blocking: bool = False  # True when status == ERROR (tool will fail if invoked)
+
+
+class RuntimeCompatibilityResult(BaseModel):
+    """Full image-vs-tools compatibility report."""
+
+    image: str
+    status: RuntimeCheckStatus
+    capabilities: PrestoRuntimeCapabilities
+    tool_readiness: list[ToolReadiness] = Field(default_factory=list)
+
+
 class ValidateEnvironmentResult(BaseModel):
     status: EnvironmentCheckStatus
     checks: list[EnvironmentCheck] = Field(default_factory=list)
+    runtime_compatibility: RuntimeCompatibilityResult | None = None
 
 
 class ArtifactType(StrEnum):
@@ -485,3 +540,73 @@ class SearchBinResult(BaseModel):
     candidate_files: list[str] = Field(default_factory=list)
     top_candidates: list[SearchBinCandidate] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+
+# -- New tools: stacksearch / simple_zapbirds / compare_periods / binary_info ----
+
+
+class StackSearchCandidate(BaseModel):
+    cand_num: int | None = None
+    sigma: float | None = None
+    frequency_hz: float | None = None
+    period_ms: float | None = None
+    dm: float | None = None
+    note: str | None = None
+
+
+class StackSearchResult(BaseModel):
+    fft_files: list[str] = Field(default_factory=list)
+    candidate_files: list[str] = Field(default_factory=list)
+    summary_file: str | None = None
+    top_candidates: list[StackSearchCandidate] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class SimpleZapbirdsResult(BaseModel):
+    input_fft_files: list[str] = Field(default_factory=list)
+    staged_fft_files: list[str] = Field(default_factory=list)
+    birds_file: str
+    zapped_fft_files: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class PeriodMatch(BaseModel):
+    par_file: str
+    pulsar_name: str | None = None
+    candidate_period_ms: float
+    matched_period_ms: float
+    # n > 0: candidate ≈ pulsar_period / n (n-th harmonic; n=1 fundamental).
+    # n < 0: candidate ≈ pulsar_period * |n| (|n|-th subharmonic).
+    harmonic: int
+    delta: float  # relative difference at the matched harmonic
+    confidence_label: Literal["exact", "near", "weak", "unknown"]
+
+
+class ComparePeriodsResult(BaseModel):
+    period_ms: float
+    par_files: list[str] = Field(default_factory=list)
+    tolerance: float
+    max_harmonic: int
+    matches: list[PeriodMatch] = Field(default_factory=list)
+    summary: str = ""
+    notes: list[str] = Field(default_factory=list)
+
+
+class BinaryInfoResult(BaseModel):
+    par_file: str
+    inf_file: str | None = None
+    is_binary: bool = False
+    pulsar_name: str | None = None
+    binary_summary: dict[str, float | str | None] = Field(default_factory=dict)
+    plot_files: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class CandidateReportPdfResult(BaseModel):
+    pdf_file: str
+    page_count: int
+    title: str | None = None
+    included_artifacts: list[str] = Field(default_factory=list)
+    skipped_artifacts: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    resource_uri: str

@@ -34,9 +34,11 @@ shell out, and never write into `data/`.
 
 ## `presto.validate_environment`
 
-| Input         | Type   | Default | Notes                                           |
-|---------------|--------|---------|-------------------------------------------------|
-| `check_image` | `bool` | `true`  | If true, also `docker image inspect <image>`.   |
+| Input                    | Type   | Default | Notes                                          |
+|--------------------------|--------|---------|------------------------------------------------|
+| `check_image`            | `bool` | `true`  | If true, also `docker image inspect <image>`.  |
+| `include_tool_readiness` | `bool` | `true`  | Probe the image for per-tool readiness.        |
+| `force_refresh`          | `bool` | `false` | Bypass the ~15 min runtime-capability cache.   |
 
 **Returns** `ValidateEnvironmentResult`:
 
@@ -45,21 +47,33 @@ shell out, and never write into `data/`.
   "status": "WARN",
   "checks": [
     {"name": "settings.load", "status": "OK", "message": "..."},
-    {"name": "docker.image", "status": "WARN",
-     "message": "image not present locally: ...",
-     "remediation": "docker pull alex88ridolfi/presto5:png"}
-  ]
+    {"name": "tool_readiness.presto.rrattrap", "status": "ERROR",
+     "message": "module.presto.singlepulse=ERROR",
+     "remediation": "Use an image where presto.singlepulse imports cleanly."}
+  ],
+  "runtime_compatibility": {
+    "image": "alex88ridolfi/presto5:png",
+    "status": "ERROR",
+    "capabilities": {"binaries": [], "python_modules": []},
+    "tool_readiness": [
+      {"tool_name": "rrattrap", "status": "ERROR", "blocking": true,
+       "checks": []}
+    ]
+  }
 }
 ```
 
-Checks: `settings.load`, `data_dir.exists`, `data_dir.has_files`,
+Base checks: `settings.load`, `data_dir.exists`, `data_dir.has_files`,
 `data_dir.zero_byte_files`, `runs.writable`, `outputs.writable`,
 `logs.writable`, `docker.cli`, `docker.version`, `docker.image`,
-`policy.defaults`. Never raises; failed checks become `ERROR`/`WARN`
-entries.
+`policy.defaults`. With `include_tool_readiness=true` it also runs lightweight
+Docker probes and appends one `tool_readiness.presto.<tool>` check per tool
+plus the structured `runtime_compatibility` block. Never raises; failed checks
+become `ERROR` / `WARN` entries.
 
 **Why an agent uses it.** Triage before launching expensive work. If
-`docker.cli` is `ERROR`, no PRESTO tool will succeed.
+`docker.cli` is `ERROR`, no PRESTO tool will succeed; if a tool's readiness is
+`ERROR`, skip it. See `RUNTIME_COMPATIBILITY.md`.
 
 ## `presto.summarize_run`
 
@@ -112,11 +126,28 @@ server exposes the following PRESTO routines. **Status** legend:
 - `stable` — known good against mainline PRESTO; tested with `FakeDockerBackend`.
 - `experimental` — wired and tested in isolation; awaiting verification against
   the configured Docker image. Tool description starts with `[experimental]`.
+- `image-dependent` — correctness depends on image contents; readiness-gated
+  via `runtime_checks` (fails fast with a controlled error if unavailable).
 - `advanced` — production routine with a wide parameter space; conservative
   defaults shipped, broader knobs deliberately not exposed.
+- `utility` — no Docker, no PRESTO execution (filesystem / parsing only).
 
-Verify availability with `presto.validate_environment` before relying on any
-non-`stable` tool.
+Verify availability with `presto.validate_environment(include_tool_readiness=true)`
+before relying on any non-`stable` tool.
+
+### `presto.rrattrap` — experimental / image-dependent
+
+Group `.singlepulse` detections into candidate groups (`groups.txt`) before
+`make_spd`.
+
+Requires:
+- `rrattrap.py` in PATH inside the configured PRESTO image.
+- Python module `presto.singlepulse` importable inside that image runtime.
+
+Known issue:
+Some PRESTO images include `rrattrap.py` but do not expose
+`presto.singlepulse`. In that case `presto.rrattrap` fails fast with a
+controlled error explaining this image/runtime mismatch.
 
 ## Data preparation
 
@@ -290,3 +321,102 @@ Phase-modulation / sideband search for binary pulsars.
 where `top_candidates: list[SearchBinCandidate]`.
 
 **PRESTO command:** `search_bin [-flo <low> -fhi <high>] <fft>`.
+
+## Stack search & birdie zapping
+
+### `presto.stacksearch` — experimental / image-dependent
+
+Stack-search several `.fft` files (each from a prior `realfft` run) to boost
+weak periodic signals.
+
+| Input       | Type        | Notes                                            |
+|-------------|-------------|--------------------------------------------------|
+| `fft_files` | `list[str]` | `<run_id>/artifacts/<file>.fft`, min 2, max 256. |
+
+**Returns** `StackSearchResult { fft_files, candidate_files, summary_file, top_candidates, notes }`.
+
+**PRESTO command:** `stacksearch.py <file1>.fft <file2>.fft ...` (run in `artifacts/`).
+
+**Readiness:** needs `stacksearch.py` on PATH. A preflight fails fast with a
+controlled error otherwise.
+
+**Next tool:** `presto.sifting`, then `presto.prepfold` on survivors.
+
+### `presto.simple_zapbirds` — experimental / image-dependent
+
+Zap known interference ("birdies") out of one `.fft`. The source `.fft` is
+**copied** into the new run's `artifacts/`; the zap runs on the copy — the
+source is never modified in place.
+
+| Input        | Type   | Notes                                                  |
+|--------------|--------|--------------------------------------------------------|
+| `fft_file`   | `str`  | `<run_id>/artifacts/<file>.fft` under `RUNS_DIR`.      |
+| `birds_file` | `str`  | Birds/zap file: under `DATA_DIR` or a run artifact.    |
+
+**Returns** `SimpleZapbirdsResult { input_fft_files, staged_fft_files, birds_file, zapped_fft_files, notes }`.
+
+**PRESTO command:** `simple_zapbirds.py <staged>.fft <staged>.birds`.
+
+**Readiness:** needs `simple_zapbirds.py` on PATH.
+
+**Next tool:** `presto.accelsearch` on the zapped `.fft`.
+
+## Known-pulsar cross-check (utility — no Docker)
+
+### `presto.compare_periods` — utility
+
+Compare a candidate spin period against pulsar ephemeris (`.par`) files and
+their harmonics / subharmonics.
+
+| Input          | Type        | Notes                                              |
+|----------------|-------------|----------------------------------------------------|
+| `period_ms`    | `float`     | Candidate spin period (ms).                        |
+| `par_files`    | `list[str]` | `.par` files under `DATA_DIR` or run artifacts.    |
+| `tolerance`    | `float?`    | Relative match tolerance (default `1e-3`).         |
+| `max_harmonic` | `int?`      | Highest harmonic / subharmonic tested (default 8). |
+
+**Returns** `ComparePeriodsResult { period_ms, par_files, tolerance, max_harmonic, matches, summary, notes }`
+where each `PeriodMatch` carries `harmonic` (n>0 harmonic, n<0 subharmonic),
+`delta` and a `confidence_label` (`exact` / `near` / `weak`).
+
+Never asserts a detection — it reports how closely a candidate lines up with a
+catalogued ephemeris.
+
+### `presto.binary_info` — utility
+
+Summarise the orbital parameters of a binary-pulsar `.par` file.
+
+| Input      | Type     | Notes                                            |
+|------------|----------|--------------------------------------------------|
+| `par_file` | `str`    | `.par` under `DATA_DIR` or a run artifact.       |
+| `inf_file` | `str?`   | Optional companion `.inf` (validated, recorded). |
+
+**Returns** `BinaryInfoResult { par_file, inf_file, is_binary, pulsar_name, binary_summary, plot_files, notes }`.
+`binary_summary` includes orbital period, projected semi-major axis,
+eccentricity, the derived line-of-sight velocity amplitude and the
+Doppler-smeared spin period / frequency range.
+
+## Candidate review (utility — no Docker)
+
+### `presto.compile_candidate_report_pdf` — utility
+
+Bundle PNG/JPG plot artifacts from one or more runs into a single reviewable
+PDF, written to a fresh `runs/<run_id>/artifacts/` directory.
+
+| Input              | Type          | Notes                                          |
+|--------------------|---------------|------------------------------------------------|
+| `run_ids`          | `list[str]?`  | Runs whose `artifacts/` images to include.     |
+| `artifact_paths`   | `list[str]?`  | Explicit `<run_id>/artifacts/<file>` images.   |
+| `include_patterns` | `list[str]?`  | Globs; defaults to `*.png` / `*.jpg` / `*.jpeg`. |
+| `title`            | `str?`        | Optional title page.                           |
+| `output_prefix`    | `str?`        | PDF filename prefix (default `candidate_report`). |
+| `sort_by`          | `enum`        | `run_id_name` (default) / `mtime` / `name`.    |
+
+**Returns** `ToolRunResult[CandidateReportPdfResult]` — `pdf_file`,
+`page_count`, `included_artifacts`, `skipped_artifacts`, `notes`,
+`resource_uri`.
+
+Reads **only** artifacts under `runs/` (never `data/`, never absolute paths).
+Corrupt images are skipped (non-fatal if at least one valid image remains);
+duplicate images (same content hash) are collapsed; page order is
+deterministic.
