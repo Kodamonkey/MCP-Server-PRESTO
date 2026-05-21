@@ -11,15 +11,6 @@ import re
 
 from .errors import PolicyViolationError
 
-MIN_TIMEOUT_S = 1
-MAX_TIMEOUT_S = 6 * 60 * 60  # 6 hours
-
-MIN_CPUS = 0.1
-MAX_CPUS = 64.0
-
-MIN_MEMORY_MB = 128
-MAX_MEMORY_MB = 256 * 1024  # 256 GiB
-
 RFIFIND_MIN_TIME_S = 0.1
 RFIFIND_MAX_TIME_S = 3600.0
 
@@ -106,35 +97,6 @@ TOAS_SUBBANDS_MIN = 1
 TOAS_SUBBANDS_MAX = 4096
 TOAS_GAUSSIAN_WIDTH_MIN = 1e-6
 TOAS_GAUSSIAN_WIDTH_MAX = 1.0
-
-
-def check_timeout(timeout_s: int) -> int:
-    if not isinstance(timeout_s, int) or isinstance(timeout_s, bool):
-        raise PolicyViolationError(f"timeout_s must be int, got {type(timeout_s).__name__}")
-    if not (MIN_TIMEOUT_S <= timeout_s <= MAX_TIMEOUT_S):
-        raise PolicyViolationError(
-            f"timeout_s {timeout_s} outside [{MIN_TIMEOUT_S}, {MAX_TIMEOUT_S}]"
-        )
-    return timeout_s
-
-
-def check_cpus(cpus: float) -> float:
-    f = float(cpus)
-    if not (MIN_CPUS <= f <= MAX_CPUS):
-        raise PolicyViolationError(f"cpus {cpus} outside [{MIN_CPUS}, {MAX_CPUS}]")
-    return f
-
-
-def check_memory_mb(memory_mb: int) -> int:
-    if not isinstance(memory_mb, int) or isinstance(memory_mb, bool):
-        raise PolicyViolationError(
-            f"memory_mb must be int, got {type(memory_mb).__name__}"
-        )
-    if not (MIN_MEMORY_MB <= memory_mb <= MAX_MEMORY_MB):
-        raise PolicyViolationError(
-            f"memory_mb {memory_mb} outside [{MIN_MEMORY_MB}, {MAX_MEMORY_MB}]"
-        )
-    return memory_mb
 
 
 def check_rfifind_time(time_s: float) -> float:
@@ -640,11 +602,10 @@ def check_pfdzap_commands(cmds: list[str] | None) -> list[str] | None:
     return cmds
 
 
-# -- stacksearch / simple_zapbirds / compare_periods --------------------------
+# -- stacksearch / compare_periods ------------------------------------------
 
 STACKSEARCH_MIN_FFT = 2
 STACKSEARCH_MAX_FFT = 256
-SIMPLE_ZAPBIRDS_MAX_FFT = 256
 
 PERIOD_MS_MIN = 1e-3
 PERIOD_MS_MAX = 1.0e8  # 100 s
@@ -666,18 +627,6 @@ def check_stacksearch_input_count(n: int) -> int:
     if n > STACKSEARCH_MAX_FFT:
         raise PolicyViolationError(
             f"stacksearch input count {n} exceeds cap {STACKSEARCH_MAX_FFT}"
-        )
-    return n
-
-
-def check_simple_zapbirds_input_count(n: int) -> int:
-    if not isinstance(n, int) or isinstance(n, bool):
-        raise PolicyViolationError(f"fft file count must be int, got {type(n).__name__}")
-    if n < 1:
-        raise PolicyViolationError("simple_zapbirds requires at least one .fft file")
-    if n > SIMPLE_ZAPBIRDS_MAX_FFT:
-        raise PolicyViolationError(
-            f"simple_zapbirds input count {n} exceeds cap {SIMPLE_ZAPBIRDS_MAX_FFT}"
         )
     return n
 

@@ -1,12 +1,8 @@
 """FastMCP STDIO server. The only module that imports FastMCP.
 
-Tools registered:
-
-  * ``presto.readfile``        — wraps ``readfile``
-  * ``presto.rfifind``         — wraps ``rfifind -time <t> -o <prefix>``
-  * ``presto.prepfold``        — wraps ``prepfold -noxwin -p <p> -dm <dm> ...``
-  * ``presto.list_runs``       — reflection
-  * ``presto.get_run_manifest``— reflection
+Tool registration lives in ``server_tools.py`` (38 ``presto.*`` tools, profile-gated
+via ``PRESTO_TOOL_PROFILE``). Resources and prompts are registered in
+``server_resources.py`` and ``server_prompts.py``.
 
 Resources registered (URI templates):
 
@@ -28,13 +24,6 @@ from mcp.server.fastmcp import FastMCP
 
 from .config import Settings, ensure_runtime_dirs, get_settings, run_health_check
 from .docker_backend import BackendProtocol, DockerBackend
-from .errors import (
-    DockerInvocationError,
-    ManifestError,
-    ParserError,
-    PathSecurityError,
-    PolicyViolationError,
-)
 from .server_prompts import register_prompts
 from .server_resources import (
     _resource_artifact,
@@ -131,17 +120,6 @@ def main() -> None:
     set_settings(s)
     log.info("presto-mcp starting (image=%s, data=%s)", s.image, s.data_dir)
     mcp.run()
-
-
-# Errors we expect FastMCP to surface as ordinary tool errors. Keeping them
-# here as a manifest for readers — FastMCP serializes exception types via repr.
-_EXPORTED_ERRORS = (
-    PathSecurityError,
-    PolicyViolationError,
-    DockerInvocationError,
-    ParserError,
-    ManifestError,
-)
 
 
 if __name__ == "__main__":

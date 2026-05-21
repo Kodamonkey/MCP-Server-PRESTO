@@ -200,7 +200,7 @@ controlled, actionable error rather than a confusing traceback.
 Known case: some PRESTO images expose `rrattrap.py` but cannot
 `import presto.singlepulse`; `presto.rrattrap` then refuses to run and points
 you at `presto.validate_environment`. See
-[RUNTIME_COMPATIBILITY.md](./RUNTIME_COMPATIBILITY.md) for the full picture.
+[RUNTIME_COMPATIBILITY.md](./docs/RUNTIME_COMPATIBILITY.md) for the full picture.
 
 **Chaining runs:** tools that consume prior outputs take paths like `<run_id>/artifacts/file.dat` relative to `runs/` (see each tool’s parameter docs in the Inspector or client).
 
@@ -275,7 +275,7 @@ runs/20260517T145912Z-OE2YWN/
 
 Beyond the PRESTO-binary tools, the server exposes utility tools, navigation resources, and MCP prompts.
 
-**Utility tools** (no Docker, no PRESTO execution) — see [TOOLS.md](./TOOLS.md):
+**Utility tools** (no Docker, no PRESTO execution) — see [TOOLS.md](./docs/TOOLS.md):
 
 ```text
 presto.validate_environment        # per-check report + per-tool readiness
@@ -294,7 +294,7 @@ presto.validate_environment(include_tool_readiness=true)
 presto.list_data_files(limit=20, extensions=[".fil",".fits"])
 ```
 
-**Navigation resources** — see [RESOURCES.md](./RESOURCES.md):
+**Navigation resources** — see [RESOURCES.md](./docs/RESOURCES.md):
 
 ```text
 presto://data                              # JSON index of DATA_DIR
@@ -303,7 +303,7 @@ presto://runs/{run_id}/summary             # RunStructuredSummary JSON
 presto://runs/{run_id}/artifacts           # ArtifactSummary list (no contents)
 ```
 
-**Prompts** — see [PROMPTS.md](./PROMPTS.md). Guidance prompts appear automatically in MCP Inspector and any client that surfaces prompts. **Prompts are guidance — the MCP server does not orchestrate or auto-execute.**
+**Prompts** — see [PROMPTS.md](./docs/PROMPTS.md). Guidance prompts appear automatically in MCP Inspector and any client that surfaces prompts. **Prompts are guidance — the MCP server does not orchestrate or auto-execute.**
 
 **Separation of responsibilities.** The MCP layer ships atomic, sandboxed capabilities (tools), navigable state (resources), and reusable guidance (prompts). Stateful / adaptive orchestration (looping over candidates, branching on results, retries with parameter tweaks) belongs to a future LangGraph (or equivalent) layer above this MCP — not inside it.
 
@@ -314,10 +314,10 @@ presto://runs/{run_id}/artifacts           # ArtifactSummary list (no contents)
 - Inputs validated by `path_security` — no absolute paths, no `..`, only under `DATA_DIR` or staged run artifacts.
 - Execution: `subprocess.run(argv, shell=False)` only; no generic shell tool.
 - Docker: `--network none`, `no-new-privileges`, `--pids-limit 256`, read-only `data/` bind, optional read-only `/runs` bind for prior artifacts.
-- Concurrency: `PRESTO_MAX_CONCURRENT_RUNS` gates Docker invocations process-wide (default `1`).
+- Concurrency: `PRESTO_MAX_CONCURRENT_RUNS` gates Docker invocations process-wide (default `2`).
 - Typed errors only — no raw stack traces to clients.
 
-Details: [ARCHITECTURE.md](./ARCHITECTURE.md). Agent conventions: [AGENTS.md](./AGENTS.md).
+Details: [ARCHITECTURE.md](./docs/ARCHITECTURE.md). Agent conventions: [AGENTS.md](./AGENTS.md).
 
 ---
 
@@ -328,7 +328,7 @@ Details: [ARCHITECTURE.md](./ARCHITECTURE.md). Agent conventions: [AGENTS.md](./
 - **STDIO only** — no HTTP transport.
 - `**list_runs`** walks `runs/*/manifest.json` (fine for thousands of runs).
 - Stdout/stderr are still captured in memory before writing logs; diagnostics returned to clients are bounded, full logs remain in run resources.
-- **Image-dependent tools** (`rrattrap`, `stacksearch`, `simple_zapbirds`, `accelsearch -wmax`) only work when the configured PRESTO image provides the routine — check `presto.validate_environment(include_tool_readiness=true)`. See [RUNTIME_COMPATIBILITY.md](./RUNTIME_COMPATIBILITY.md).
+- **Image-dependent tools** (`rrattrap`, `stacksearch`, `simple_zapbirds`, `accelsearch -wmax`) only work when the configured PRESTO image provides the routine — check `presto.validate_environment(include_tool_readiness=true)`. See [RUNTIME_COMPATIBILITY.md](./docs/RUNTIME_COMPATIBILITY.md).
 - `presto.binary_info` `make_plot` is not supported (it is a no-Docker utility tool); orbital plots come from `presto.prepfold` / `presto.pfd2png`.
 - Adaptive orchestration (resume/restart, autonomous search) is **out of scope** — it belongs to a future LangGraph layer above this MCP.
 

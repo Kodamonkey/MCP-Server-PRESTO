@@ -1,4 +1,4 @@
-"""Unit tests for new policy validators added for data-prep / RFI / advanced tools."""
+"""Unit tests for policy validators (data-prep / RFI / advanced tools)."""
 
 from __future__ import annotations
 

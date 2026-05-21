@@ -13,7 +13,6 @@ dependencies = [
     "mcp==1.27.1",
     "pydantic>=2.7,<3",
     "python-dotenv>=1.0,<2",
-    "typer>=0.12,<1",
     # Image -> PDF assembly for presto.compile_candidate_report_pdf (no Docker).
     "pillow>=10.0,<12",
 ]

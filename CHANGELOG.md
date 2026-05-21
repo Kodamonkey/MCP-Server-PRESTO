@@ -28,7 +28,7 @@ All notable changes to this project are documented here. The format follows
     artifacts into one reviewable PDF (Pillow).
 - New MCP prompt `presto.candidate_review_plan` — readiness-gated candidate
   review with an explicit artifact / noise / candidate / detection taxonomy.
-- New docs: `RUNTIME_COMPATIBILITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`,
+- New docs: `docs/RUNTIME_COMPATIBILITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`,
   `CITATION.cff`, a PRESTO-tool-bug issue template.
 - New `workflow_dispatch` CI workflow `runtime-compatibility.yml` that probes
   the PRESTO image and uploads `runtime_compatibility.json` + `tool_readiness.md`.

@@ -191,13 +191,12 @@ runs/
 manifests older than their timeout are reported as failed views without
 rewriting history. No SQLite in MVP.
 
-## Roadmap (post-MVP)
+## Roadmap (next)
 
-1. Native binary parsers for `.mask`/`.stats`/`.bestprof`.
-2. `presto.prepdata`, `presto.accelsearch`, `presto.single_pulse_search.py`.
-3. Cross-tool workflows (chain `rfifind → prepsubband → accelsearch → prepfold`).
-4. SQLite run index for fast filtering by tool/date/source.
-5. Optional HTTP transport behind authentication.
-6. Image-digest pinning + supply-chain verification.
+1. Native binary parsers for `.mask`/`.stats`/`.bestprof` (beyond stdout-only contracts).
+2. Broader E2E coverage for image-dependent / experimental tools in CI.
+3. Optional SQLite run index for fast filtering by tool/date/source.
+4. Optional HTTP transport behind authentication (out of scope for stdio-only deployments).
+5. Image-digest pinning + supply-chain verification.
 
-Anything beyond this is explicitly out of scope until the MVP ships.
+Cross-tool orchestration (e.g. `rfifind → prepsubband → accelsearch → prepfold`) belongs in a client or LangGraph layer above this MCP — use prompts in [PROMPTS.md](./PROMPTS.md) for guidance, not in-server pipelines.

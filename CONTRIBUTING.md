@@ -2,8 +2,8 @@
 
 This is a **PRESTO-only** MCP server: a typed, sandboxed, reproducible provider
 of PRESTO capabilities. Adaptive orchestration is explicitly out of scope (it
-belongs to a future LangGraph layer above this MCP). Read `CLAUDE.md` and
-`ARCHITECTURE.md` before starting.
+belongs to a future LangGraph layer above this MCP). Read [AGENTS.md](./AGENTS.md) and
+[ARCHITECTURE.md](./docs/ARCHITECTURE.md) before starting.
 
 ## Non-negotiable rules
 
@@ -35,7 +35,7 @@ accepted only if **every** item below is true:
    `runtime_checks` and fails fast with a controlled, actionable error.
 7. It has unit tests (parser / input validation) **and** at least one
    integration test using `FakeDockerBackend`.
-8. It has documentation in `TOOLS.md` (status, routine, I/O, readiness,
+8. It has documentation in `docs/TOOLS.md` (status, routine, I/O, readiness,
    next-suggested tools, a minimal example).
 9. It does not duplicate an existing tool. Extend utilities / prompts /
    resources before adding a new tool.
@@ -52,7 +52,7 @@ If you cannot satisfy all nine, the work belongs in an existing tool
 5. `runtime_checks._TOOL_DEPS` entry if it depends on image contents.
 6. Unit test + integration test (`FakeDockerBackend`) + an
    `@pytest.mark.e2e` smoke test where feasible.
-7. Docs updated: `TOOLS.md`, and `README.md` / `RUNTIME_COMPATIBILITY.md` if
+7. Docs updated: `docs/TOOLS.md`, and `README.md` / `docs/RUNTIME_COMPATIBILITY.md` if
    the tool is image-dependent.
 8. `CHANGELOG.md` `Unreleased` section updated.
 
@@ -71,8 +71,15 @@ E2E (needs Docker + the PRESTO image + real data):
 uv run pytest -q tests/e2e --run-e2e
 ```
 
-CI runs `ruff` + `pytest` on every PR. The image-probing workflow
-`runtime-compatibility.yml` is manual (`workflow_dispatch`).
+CI workflows (what we keep and why):
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `ci.yml` | push / PR | Required: `ruff` + unit/integration tests + lightweight e2e (`test_ddplan_e2e`) |
+| `runtime-compatibility.yml` | manual | Optional image probe; uses `scripts/runtime_compat_report.py` |
+| `publish.yml` | tag `v*` | PyPI release when versioning a package release |
+
+There is **no** Dockerfile for the MCP server: production usage is host stdio (`uv run python -m presto_mcp.server`) invoking the host Docker CLI for PRESTO sub-containers. Do not add `docker.sock` mounts.
 
 ## Verifying image-dependent tools
 
