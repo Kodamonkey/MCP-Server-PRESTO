@@ -10,7 +10,6 @@ PRESTO container. It also owns timeout-kill semantics.
 
 from __future__ import annotations
 
-import logging
 import shutil
 import subprocess
 import time
@@ -18,9 +17,8 @@ from pathlib import Path
 from typing import Protocol
 
 from .errors import DockerInvocationError
-from .models import BackendResult, DockerInvocation, RunStatus
-
 from .logging_setup import phase_logger
+from .models import BackendResult, DockerInvocation, RunStatus
 
 log = phase_logger("run", "presto_mcp.docker_backend")
 
