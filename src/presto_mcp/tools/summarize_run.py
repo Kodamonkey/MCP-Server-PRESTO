@@ -11,6 +11,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..artifact_classification import classify_artifact
 from ..config import Settings, get_settings
 from ..errors import ManifestError, PathSecurityError
 from ..manifest import get_manifest
@@ -40,29 +41,6 @@ _INLINE_TEXT_EXTS: frozenset[str] = frozenset(
         ".json",
     }
 )
-
-
-def _classify_artifact(name: str) -> ArtifactType:
-    n = name.lower()
-    if "accel_" in n or n.endswith(".txtcand"):
-        return ArtifactType.ACCEL_CANDIDATES
-    if n.endswith((".mask", ".rfi", ".stats", ".bytemask")):
-        return ArtifactType.RFI
-    if n.endswith((".dat", ".inf")):
-        return ArtifactType.TIME_SERIES
-    if n.endswith(".fft"):
-        return ArtifactType.FFT
-    if n.endswith(".singlepulse"):
-        return ArtifactType.SINGLE_PULSE
-    if n.endswith(".spd"):
-        return ArtifactType.SPD
-    if n.endswith((".png", ".ps", ".eps", ".pdf")):
-        return ArtifactType.PLOTS
-    if n.endswith((".pfd", ".bestprof")):
-        return ArtifactType.FOLD
-    if n.endswith((".tim", ".toa")):
-        return ArtifactType.TIMING
-    return ArtifactType.OTHER
 
 
 def _suggest_next(types: set[ArtifactType]) -> list[str]:
@@ -127,7 +105,7 @@ def summarize_run(
     counts: dict[ArtifactType, int] = {}
     by_type: dict[ArtifactType, list[str]] = {}
     for p in artifact_paths:
-        t = _classify_artifact(p.name)
+        t = classify_artifact(p.name)
         counts[t] = counts.get(t, 0) + 1
         by_type.setdefault(t, []).append(p.name)
 
@@ -190,7 +168,7 @@ def inspect_artifacts(
                 name=p.name,
                 size_bytes=size,
                 modified_at=datetime.fromtimestamp(st.st_mtime, tz=UTC),
-                likely_type=_classify_artifact(p.name),
+                likely_type=classify_artifact(p.name),
                 resource_uri=_artifact_uri(run_id, p.name),
                 is_inline_readable=_is_inline_readable(p.name, size),
             )

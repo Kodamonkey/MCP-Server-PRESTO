@@ -9,7 +9,6 @@ This module is async-free on purpose. Tools wrap calls in ``asyncio.to_thread``.
 
 from __future__ import annotations
 
-import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -20,8 +19,10 @@ from typing import Generic, Literal, TypeVar
 from pydantic import BaseModel
 
 from .config import Settings
+from .consumable_exports import export_run_consumables
 from .docker_backend import BackendProtocol, build_invocation
 from .errors import ManifestError, PathSecurityError
+from .logging_setup import phase_logger
 from .manifest import write_manifest
 from .models import (
     BackendResult,
@@ -38,8 +39,6 @@ from .path_security import (
     resolve_input_path,
     resolve_run_artifact,
 )
-
-from .logging_setup import phase_logger
 
 log = phase_logger("run", "presto_mcp.executor")
 
@@ -321,6 +320,14 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
         )
 
     manifest_uri, stdout_uri, stderr_uri, artifact_uris = _result_uris(run_id, artifacts)
+    export_run_consumables(
+        prepared.settings,
+        run_id=run_id,
+        tool_name=spec.tool_name,
+        run_dir=run_dir,
+        status=manifest.status,
+        manifest_uri=manifest_uri,
+    )
     log.info(
         "done %s run_id=%s status=%s %.1fs",
         spec.tool_name,
@@ -457,6 +464,17 @@ def _write_background_failure(prepared: _PreparedRun[T], exc: Exception) -> None
         write_manifest(prepared.run_dir, manifest)
     except ManifestError:
         log.exception("could not write background failure manifest for %s", prepared.run_id)
+        return
+
+    manifest_uri, _, _, _ = _result_uris(prepared.run_id, artifacts)
+    export_run_consumables(
+        prepared.settings,
+        run_id=prepared.run_id,
+        tool_name=prepared.spec.tool_name,
+        run_dir=prepared.run_dir,
+        status=manifest.status,
+        manifest_uri=manifest_uri,
+    )
 
 
 def _safe_digest(backend: BackendProtocol, image: str) -> str | None:

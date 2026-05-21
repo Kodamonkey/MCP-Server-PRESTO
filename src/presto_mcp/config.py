@@ -14,6 +14,7 @@ import sys
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 
@@ -91,6 +92,18 @@ def _default_auto_start_docker() -> bool:
     return sys.platform in ("win32", "darwin")
 
 
+def _env_csv_lower_set(name: str, default: str) -> frozenset[str]:
+    raw = os.environ.get(name, default)
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+def _env_export_on_status() -> Literal["SUCCESS", "ALWAYS"]:
+    raw = os.environ.get("PRESTO_EXPORT_ON_STATUS", "SUCCESS").strip().upper()
+    if raw == "ALWAYS":
+        return "ALWAYS"
+    return "SUCCESS"
+
+
 def _env_int_min(name: str, default: int, minimum: int) -> int:
     raw = os.environ.get(name)
     if raw is None:
@@ -125,6 +138,10 @@ class Settings:
     pull_image_timeout_s: int = 900
     log_to_file: bool = True
     python_bin: str = ""
+    export_consumables: bool = True
+    export_classes: frozenset[str] = frozenset({"final", "pipeline"})
+    export_max_bytes: int = 500_000_000
+    export_on_status: Literal["SUCCESS", "ALWAYS"] = "SUCCESS"
     max_concurrent_runs: int = 1
     tool_profile: str = "all"
 
@@ -169,6 +186,10 @@ def _load_from_env() -> Settings:
         ),
         log_to_file=_env_bool("PRESTO_LOG_TO_FILE", True),
         python_bin=os.environ.get("PRESTO_PYTHON_BIN", "").strip(),
+        export_consumables=_env_bool("PRESTO_EXPORT_CONSUMABLES", True),
+        export_classes=_env_csv_lower_set("PRESTO_EXPORT_CLASSES", "final,pipeline"),
+        export_max_bytes=_env_int_min("PRESTO_EXPORT_MAX_BYTES", 500_000_000, 1),
+        export_on_status=_env_export_on_status(),
         max_concurrent_runs=_env_int_min("PRESTO_MAX_CONCURRENT_RUNS", 2, 1),
         tool_profile=os.environ.get("PRESTO_TOOL_PROFILE", "all").strip().lower(),
     )

@@ -63,7 +63,7 @@ If you need deeper control, you can add any of these variables to `.env`:
 | `PRESTO_IMAGE` | `alex88ridolfi/presto5:png` | Use a different PRESTO runtime image/tag. |
 | `PRESTO_DATA_DIR` | `./data` | Your observation files live outside the repo. |
 | `PRESTO_RUNS_DIR` | `./runs` | Save manifests near your data or in another disk. |
-| `PRESTO_OUTPUTS_DIR` | `./outputs` | Redirect generated outputs to a custom location. |
+| `PRESTO_OUTPUTS_DIR` | `./outputs` | Astronomer-facing export tray (`final/`, `pipeline/`, `index.jsonl`). |
 | `PRESTO_LOGS_DIR` | `./logs` | Redirect server logs to a custom location. |
 | `PRESTO_TOOL_PROFILE` | `all` | Expose only a subset of tools (`core`, `periodic`, etc.). |
 | `PRESTO_AUTO_START_DOCKER` | Windows/macOS: `true`; Linux: `false` | Disable/enable Docker Desktop auto-start behavior. |
@@ -80,6 +80,10 @@ If you need deeper control, you can add any of these variables to `.env`:
 | `PRESTO_LOG_LEVEL` | `INFO` | Console/file verbosity (`DEBUG` for troubleshooting). |
 | `PRESTO_LOG_TO_FILE` | `true` | Mirror stderr logs to `server_sessions/<session_id>.log`. |
 | `PRESTO_PYTHON_BIN` | *(auto)* | `python3` or `python` inside the image; empty = detect at startup. |
+| `PRESTO_EXPORT_CONSUMABLES` | `true` | Copy useful artifacts from each run into `PRESTO_OUTPUTS_DIR`. |
+| `PRESTO_EXPORT_CLASSES` | `final,pipeline` | `final` = plots/reports; `pipeline` = masks, `.singlepulse`, `.spd`, etc. |
+| `PRESTO_EXPORT_MAX_BYTES` | `500000000` | Skip files larger than this when exporting. |
+| `PRESTO_EXPORT_ON_STATUS` | `SUCCESS` | Export only on successful runs (`ALWAYS` for debug). |
 
 ### 4. Verify startup
 
@@ -279,6 +283,7 @@ All logs go to **stderr** (stdout stays JSON-RPC-only). Each line uses a short p
 | `[mcp]` | MCP tool call in/out (`→ presto.readfile`, `← …`) |
 | `[run]` | PRESTO execution in Docker (`start` / `done`) |
 | `[audit]` | Audit session open/close |
+| `[export]` | Consumable files copied to `outputs/` |
 
 When `PRESTO_LOG_TO_FILE=true` (default), the same lines are appended to:
 
@@ -293,6 +298,23 @@ Structured, machine-readable audit trail:
 - `PRESTO_LOGS_DIR/mcp_audit_sessions/<session_id>.jsonl`
 
 Each tool call adds two JSON lines (`request` / `response`) with arguments, duration, `run_id`, and `status`. Use this for automated review; use `server_sessions/*.log` for human-readable timelines.
+
+### Consumable exports (`outputs/`)
+
+After each successful PRESTO run, the executor copies astronomer-useful artifacts from `runs/<run_id>/artifacts/` into `PRESTO_OUTPUTS_DIR` (no extra MCP tool call). Full run history stays in `runs/`; `outputs/` is the flat tray for browsing results.
+
+Layout:
+
+```
+PRESTO_OUTPUTS_DIR/
+  index.jsonl
+  final/      # PNG, PDF, PFD, TOAs — deliverables
+  pipeline/   # masks, singlepulse, spd, dat, fft — next pipeline steps
+```
+
+Files are named `<run_id>_<tool>_<original_name>`. Each export appends one JSON line to `index.jsonl` with `run_id`, `tool`, `class`, `src`, `dst`, and `manifest_uri`.
+
+Disable with `PRESTO_EXPORT_CONSUMABLES=false` in `.env` (advanced; not in `.env.example`).
 
 ---
 

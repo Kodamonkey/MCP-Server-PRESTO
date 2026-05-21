@@ -26,6 +26,7 @@ _PHASE_BY_LOGGER: dict[str, str] = {
     "presto_mcp.executor": "run",
     "presto_mcp.server_tools": "mcp",
     "presto_mcp.audit_log": "audit",
+    "presto_mcp.consumable_exports": "export",
 }
 
 _file_handler: logging.FileHandler | None = None

@@ -420,3 +420,10 @@ Reads **only** artifacts under `runs/` (never `data/`, never absolute paths).
 Corrupt images are skipped (non-fatal if at least one valid image remains);
 duplicate images (same content hash) are collapsed; page order is
 deterministic.
+
+## Consumable exports (automatic)
+
+PRESTO tools do not copy files to `PRESTO_OUTPUTS_DIR` themselves. After each
+run completes, the executor exports selected artifacts from
+`runs/<run_id>/artifacts/` into `outputs/final/` or `outputs/pipeline/` and
+appends a row to `outputs/index.jsonl`. See README “Consumable exports”.
