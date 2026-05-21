@@ -84,13 +84,13 @@ From the repo root:
 uv run --directory . python -m presto_mcp.server
 ```
 
-You should see `presto-mcp starting` and the `data=...` path. Press Ctrl+C to stop. If startup fails, read the **banner on stderr** (also visible in the MCP Inspector terminal): it lists the error code, a short summary, and numbered remediation steps.
+You should see `presto-mcp ready` in the logs and, in an interactive terminal, a **RUNNING — ready for an MCP client** banner on stderr. Press Ctrl+C to stop. If startup fails, read the **banner on stderr** (also visible in the MCP Inspector terminal): it lists the error code, a short summary, and numbered remediation steps.
 
 **Common startup failure — `DOCKER_DAEMON_DOWN`:** Docker is installed but Docker Desktop is not running. On Windows/macOS the server can try to launch it automatically (`PRESTO_AUTO_START_DOCKER=true` by default; wait up to `PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS`). You can also start Docker Desktop manually, confirm `docker info` works, then restart presto-mcp.
 
 **Inspector “connects” but lists no tools:** the child process exited during the health check. Run the same `uv run ...` command in a terminal — do not rely on the Inspector UI alone.
 
-**`Invalid JSON: EOF` / `Received exception from stream` with `input_value='\n'`:** you pressed Enter in a terminal where the server is waiting on stdio, or the MCP client sent an empty line. Do not type in that window — use Inspector **Connect** only. If Docker was still starting, wait until `docker info` works, then click **Connect** again (do not press Enter in the server terminal).
+**`Invalid JSON: EOF` / `Received exception from stream` with `input_value='\n'`:** you pressed Enter in a terminal where the server is waiting on stdio, or the MCP client sent an empty line. Do not type in that window — connect from your MCP client instead. If Docker was still starting, wait until `docker info` works, then connect again (do not press Enter in the server terminal).
 
 **Note:** PRESTO already runs inside ephemeral `docker run --rm` containers per tool call. Startup only ensures the Docker *engine* is available; it does not start a long-lived PRESTO container.
 

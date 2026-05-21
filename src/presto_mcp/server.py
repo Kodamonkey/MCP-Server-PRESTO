@@ -136,12 +136,16 @@ def main() -> None:
         raise SystemExit(2) from e
 
     set_settings(s)
-    log.info("presto-mcp starting (image=%s, data=%s)", s.image, s.data_dir)
+    log.info("presto-mcp ready (image=%s, data=%s)", s.image, s.data_dir)
     if sys.stdin.isatty():
-        log.warning(
-            "MCP stdio active — connect with Inspector/Cursor (Connect). "
-            "Do not press Enter in this terminal (empty lines break JSON-RPC). "
-            "Stop with Ctrl+C."
+        print(
+            "\n"
+            "presto-mcp: RUNNING — ready for an MCP client.\n"
+            "  • Connect from your MCP client (Inspector, Claude Desktop, IDE, etc.).\n"
+            "  • This terminal is only the server process; do not type here (Enter breaks stdio).\n"
+            "  • Stop the server: Ctrl+C\n",
+            file=sys.stderr,
+            flush=True,
         )
     try:
         mcp.run()
