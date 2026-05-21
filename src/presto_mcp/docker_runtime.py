@@ -113,7 +113,9 @@ def diagnose_docker_info_failure(
             steps.insert(
                 0,
                 "presto-mcp attempted to start Docker Desktop automatically but the "
-                "daemon did not become ready in time.",
+                "daemon did not become ready in time (startup wait is capped for MCP "
+                "stdio clients — increase PRESTO_AUTO_START_DOCKER_STARTUP_WAIT_SECONDS "
+                "or wait for Docker, then click Connect again in Inspector).",
             )
         return DockerDaemonDiagnosis(
             code="DOCKER_DAEMON_DOWN",
@@ -248,11 +250,17 @@ def wait_for_docker_daemon(
     *,
     timeout_s: int = _DEFAULT_AUTO_START_TIMEOUT_S,
     poll_interval_s: float = _POLL_INTERVAL_S,
+    log_progress: bool = False,
 ) -> DockerInfoResult:
     """Poll ``docker info`` until success or timeout."""
     deadline = time.monotonic() + timeout_s
     last = run_docker_info(docker_bin)
+    next_progress = time.monotonic() + 10.0
     while not last.ok and time.monotonic() < deadline:
+        if log_progress and time.monotonic() >= next_progress:
+            remaining = max(0, int(deadline - time.monotonic()))
+            log.info("still waiting for Docker daemon (%ss left)", remaining)
+            next_progress = time.monotonic() + 10.0
         time.sleep(poll_interval_s)
         last = run_docker_info(docker_bin)
     return last
@@ -263,6 +271,7 @@ def ensure_docker_daemon(
     *,
     auto_start: bool,
     wait_timeout_s: int = _DEFAULT_AUTO_START_TIMEOUT_S,
+    log_progress: bool = False,
 ) -> DockerDaemonDiagnosis | None:
     """Return None if daemon is healthy; otherwise a structured diagnosis."""
     first = run_docker_info(docker_bin)
@@ -276,7 +285,11 @@ def ensure_docker_daemon(
             "waiting up to %ss for Docker daemon after auto-start attempt",
             wait_timeout_s,
         )
-        first = wait_for_docker_daemon(docker_bin, timeout_s=wait_timeout_s)
+        first = wait_for_docker_daemon(
+            docker_bin,
+            timeout_s=wait_timeout_s,
+            log_progress=log_progress,
+        )
 
     if first.ok:
         return None

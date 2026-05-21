@@ -52,6 +52,30 @@ Put observation files in `data/` (or in the directory you set in `PRESTO_DATA_DI
 
 **Windows + OneDrive:** right-click the data folder -> *Always keep on this device* (0-byte placeholders fail the health check).
 
+#### All `.env` variables (including advanced)
+
+`.env.example` is intentionally minimal for day-to-day use.  
+If you need deeper control, you can add any of these variables to `.env`:
+
+| Variable | Default | When to change |
+|---|---|---|
+| `PRESTO_IMAGE` | `alex88ridolfi/presto5:png` | Use a different PRESTO runtime image/tag. |
+| `PRESTO_DATA_DIR` | `./data` | Your observation files live outside the repo. |
+| `PRESTO_RUNS_DIR` | `./runs` | Save manifests near your data or in another disk. |
+| `PRESTO_OUTPUTS_DIR` | `./outputs` | Redirect generated outputs to a custom location. |
+| `PRESTO_LOGS_DIR` | `./logs` | Redirect server logs to a custom location. |
+| `PRESTO_TOOL_PROFILE` | `all` | Expose only a subset of tools (`core`, `periodic`, etc.). |
+| `PRESTO_AUTO_START_DOCKER` | Windows/macOS: `true`; Linux: `false` | Disable/enable Docker Desktop auto-start behavior. |
+| `PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS` | `120` | Give Docker more total time to become available. |
+| `PRESTO_AUTO_START_DOCKER_STARTUP_WAIT_SECONDS` | `45` | Startup wait cap for stdio clients before retrying Connect. |
+| `PRESTO_DEFAULT_CPUS` | `4` | Increase/decrease CPU per PRESTO invocation. |
+| `PRESTO_DEFAULT_MEMORY_MB` | `8192` | Increase memory for heavy jobs or reduce on small hosts. |
+| `PRESTO_DEFAULT_TIMEOUT_SECONDS` | `1800` | Increase timeout for long runs. |
+| `PRESTO_MAX_CONCURRENT_RUNS` | `2` | Allow multiple concurrent Docker runs (advanced). |
+| `PRESTO_NETWORK` | `none` | Keep isolated; change only for debugging. |
+| `PRESTO_SKIP_HEALTHCHECK` | `false` | Tests/debug only; do not use in production. |
+| `PRESTO_LOG_LEVEL` | `INFO` | Verbose startup/debug logs (`DEBUG`) when troubleshooting. |
+
 ### 4. Verify startup
 
 From the repo root:
@@ -65,6 +89,8 @@ You should see `presto-mcp starting` and the `data=...` path. Press Ctrl+C to st
 **Common startup failure — `DOCKER_DAEMON_DOWN`:** Docker is installed but Docker Desktop is not running. On Windows/macOS the server can try to launch it automatically (`PRESTO_AUTO_START_DOCKER=true` by default; wait up to `PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS`). You can also start Docker Desktop manually, confirm `docker info` works, then restart presto-mcp.
 
 **Inspector “connects” but lists no tools:** the child process exited during the health check. Run the same `uv run ...` command in a terminal — do not rely on the Inspector UI alone.
+
+**`Invalid JSON: EOF` / `Received exception from stream` with `input_value='\n'`:** you pressed Enter in a terminal where the server is waiting on stdio, or the MCP client sent an empty line. Do not type in that window — use Inspector **Connect** only. If Docker was still starting, wait until `docker info` works, then click **Connect** again (do not press Enter in the server terminal).
 
 **Note:** PRESTO already runs inside ephemeral `docker run --rm` containers per tool call. Startup only ensures the Docker *engine* is available; it does not start a long-lived PRESTO container.
 

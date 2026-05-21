@@ -108,11 +108,16 @@ register_prompts(mcp)
 
 
 def _configure_logging() -> None:
+    """Send all logs to stderr so stdout stays JSON-RPC-only for MCP stdio."""
     level = os.environ.get("PRESTO_LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=getattr(logging, level, logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    root = logging.getLogger()
+    root.handlers.clear()
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     )
+    root.addHandler(handler)
+    root.setLevel(getattr(logging, level, logging.INFO))
 
 
 def main() -> None:
@@ -132,7 +137,17 @@ def main() -> None:
 
     set_settings(s)
     log.info("presto-mcp starting (image=%s, data=%s)", s.image, s.data_dir)
-    mcp.run()
+    if sys.stdin.isatty():
+        log.warning(
+            "MCP stdio active — connect with Inspector/Cursor (Connect). "
+            "Do not press Enter in this terminal (empty lines break JSON-RPC). "
+            "Stop with Ctrl+C."
+        )
+    try:
+        mcp.run()
+    except KeyboardInterrupt:
+        # Normal shutdown path in local terminals; avoid noisy anyio traceback.
+        log.info("presto-mcp stopped by user (Ctrl+C)")
 
 
 if __name__ == "__main__":

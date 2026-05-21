@@ -96,6 +96,7 @@ class Settings:
     skip_healthcheck: bool
     auto_start_docker: bool = False
     auto_start_docker_timeout_s: int = 120
+    auto_start_docker_startup_wait_s: int = 45
     max_concurrent_runs: int = 1
     tool_profile: str = "all"
 
@@ -126,6 +127,9 @@ def _load_from_env() -> Settings:
         ),
         auto_start_docker_timeout_s=_env_int_min(
             "PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS", 120, 15
+        ),
+        auto_start_docker_startup_wait_s=_env_int_min(
+            "PRESTO_AUTO_START_DOCKER_STARTUP_WAIT_SECONDS", 45, 10
         ),
         max_concurrent_runs=_env_int_min("PRESTO_MAX_CONCURRENT_RUNS", 2, 1),
         tool_profile=os.environ.get("PRESTO_TOOL_PROFILE", "all").strip().lower(),
@@ -305,10 +309,17 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
             )
         )
 
+    # Cap wait at startup so MCP stdio clients (Inspector/Cursor) are not left
+    # idle for minutes before the process begins reading JSON-RPC from stdin.
+    startup_wait = min(
+        s.auto_start_docker_timeout_s,
+        s.auto_start_docker_startup_wait_s,
+    )
     diagnosis = ensure_docker_daemon(
         docker,
         auto_start=s.auto_start_docker,
-        wait_timeout_s=s.auto_start_docker_timeout_s,
+        wait_timeout_s=startup_wait,
+        log_progress=True,
     )
     if diagnosis is not None:
         raise HealthCheckError.from_docker_diagnosis(diagnosis)
