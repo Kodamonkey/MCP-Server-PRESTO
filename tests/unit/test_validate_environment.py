@@ -17,7 +17,6 @@ def _settings(tmp_path: Path, *, data_dir: Path | None = None) -> Settings:
         data_dir=data_dir if data_dir is not None else tmp_path / "data",
         runs_dir=tmp_path / "runs",
         outputs_dir=tmp_path / "outputs",
-        logs_dir=tmp_path / "logs",
         default_cpus=4.0,
         default_memory_mb=8192,
         default_timeout_s=1800,

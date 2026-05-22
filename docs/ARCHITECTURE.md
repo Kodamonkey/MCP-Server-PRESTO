@@ -185,20 +185,33 @@ runs/
         └── <prefix>.pfd.bestprof
 ```
 
-`outputs/` is used by post-run consumable export (outside PRESTO binaries). The
-executor mirrors selected artifacts into:
+`runs/` is the **internal workdir**: raw, complete, never published directly.
+
+### Modern reporting layer (`outputs/`)
+
+The `reporting/` package turns a run into clean, astronomer-facing artifacts on
+demand (7 `presto.*` tools). It treats `runs/` as read-only input and publishes
+into a fresh `outputs/<run_id>/`:
 
 ```
-outputs/
-  index.jsonl                    # legacy compact rows
-  index/events.v2.jsonl          # enriched rows (type/category/utility/inputs)
-  index/catalog.v2.json          # grouped snapshot by run
-  by_run/<run_id>/<categoria>/   # astronomy-facing folders
+outputs/<run_id>/
+  manifest.json  summary.json  candidates.csv  report.html  report.md
+  visuals/  thumbnails/  waterfalls/  candidates/<id>/  assets/
+  presto_raw_exports/   (only when raw export is explicitly requested)
 ```
 
-`PRESTO_EXPORT_CLASSES` (`final`,`pipeline`) remains a role filter; destination
-folders are category-oriented (`candidatos`, `eventos`, `timing`, `rfi`, `fold`,
-`visuales`, `reportes`, `intermedios`).
+`ArtifactManager` enforces a public extension allowlist (`.json .csv .html .md
+.png .pdf`); raw PRESTO files (`.dat`, `.fft`, `.pfd`, `.singlepulse`, `.ps`, …)
+are never published by default. See [artifact_policy.md](./artifact_policy.md)
+and [modern_reporting_layer.md](./modern_reporting_layer.md).
+
+### Observability (`logs/`)
+
+The `observability/` package writes a per-server-session structured log
+(`logs/server/`) and, for each report run / client-grouped workflow, a per-run
+timeline, tool-call / PRESTO-command / artifact / error JSONL streams and a live
+`status.md` under `logs/runs/<run_id>/`. Human + JSONL logs run side by side with
+rotation and secret redaction.
 
 `list_runs` is `glob("runs/*/manifest.json") → load_manifest`. Stale `RUNNING`
 manifests older than their timeout are reported as failed views without

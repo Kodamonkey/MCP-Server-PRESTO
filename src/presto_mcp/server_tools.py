@@ -8,16 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from .audit_log import append_audit_entry
 from .config import Settings
 from .docker_backend import BackendProtocol
-from .logging_setup import phase_logger
 from .models import (
     AccelsearchResult,
     BinaryInfoResult,
@@ -59,6 +57,9 @@ from .models import (
     WeightsToIgnorechanResult,
     ZapbirdsResult,
 )
+from .observability.redaction import summarize_args
+from .observability.tool_logging import ToolCallContext
+from .reporting.schemas import ReportToolResult
 from .tool_metadata import PROFILE_NAMES, resolve_profile
 from .tools import list_runs as list_runs_tool
 from .tools.accelsearch import run_accelsearch
@@ -82,6 +83,15 @@ from .tools.prepsubband import run_prepsubband
 from .tools.psrfits2fil import run_psrfits2fil
 from .tools.readfile import run_readfile
 from .tools.realfft import run_realfft
+from .tools.reporting import (
+    run_export_candidates_csv,
+    run_generate_candidate_waterfalls,
+    run_generate_modern_report_bundle,
+    run_generate_report_html,
+    run_generate_report_markdown,
+    run_generate_summary_json,
+    run_generate_visual_artifacts,
+)
 from .tools.rfifind import run_rfifind
 from .tools.rfifind_stats import run_rfifind_stats
 from .tools.rrattrap import run_rrattrap
@@ -98,8 +108,6 @@ from .tools.waterfaller import run_waterfaller
 from .tools.weights_to_ignorechan import run_weights_to_ignorechan
 from .tools.zapbirds import run_zapbirds
 
-log = phase_logger("mcp", "presto_mcp.server_tools")
-
 # Shared annotation for the repeated `background` flag (previously duplicated
 # inline in ~34 tool signatures).
 _BackgroundParam = Annotated[
@@ -112,6 +120,27 @@ _BackgroundParam = Annotated[
         ),
     ),
 ]
+
+# Injected into every tool by the `tool` decorator (no per-tool edits): an
+# optional client-supplied workflow id that groups a pipeline's tool calls into
+# one observability run (logs/runs/<id>/ with a live status.md).
+_WORKFLOW_RUN_ID_PARAM = inspect.Parameter(
+    "workflow_run_id",
+    inspect.Parameter.KEYWORD_ONLY,
+    default=None,
+    annotation=Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Optional workflow run id (YYYYMMDDTHHMMSSZ-XXXXXX) grouping this "
+                "call's structured logs under logs/runs/<id>/ with a live "
+                "status.md. Omit for standalone calls; reuse the same id across a "
+                "pipeline to get one grouped timeline."
+            ),
+        ),
+    ],
+)
 
 
 def register_tools(
@@ -128,102 +157,54 @@ def register_tools(
     except Exception:  # noqa: BLE001 - never fail registration over config
         _profile = "all"
     if _profile not in PROFILE_NAMES:
-        log.warning(
-            "unknown PRESTO_TOOL_PROFILE %r; exposing all tools (valid: %s)",
-            _profile,
-            ", ".join(PROFILE_NAMES),
-        )
+        pass
     _enabled = resolve_profile(_profile)
 
-    def _audit_request(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-        request_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-        try:
-            append_audit_entry(
-                _settings_for_tools(),
-                tool_name=name,
-                phase="request",
-                payload={
-                    "request_id": request_id,
-                    "args_count": len(args),
-                    "kwargs": kwargs,
-                },
-            )
-        except Exception as e:  # noqa: BLE001
-            log.debug("audit request skipped for %s: %s", name, e)
-        log.info("→ %s", name)
-        return request_id
-
-    def _audit_response(
-        name: str,
-        request_id: str,
-        started_at: datetime,
-        *,
-        result: Any = None,
-        error: str | None = None,
-    ) -> None:
-        payload: dict[str, Any] = {
-            "request_id": request_id,
-            "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000),
-        }
-        if error is not None:
-            payload["ok"] = False
-            payload["error"] = error
-        else:
-            payload["ok"] = True
-            if isinstance(result, ToolRunResult):
-                payload["run_id"] = result.run_id
-                payload["status"] = result.status
-                payload["manifest_uri"] = result.manifest_uri
-            else:
-                payload["result_type"] = type(result).__name__
-
-        try:
-            append_audit_entry(
-                _settings_for_tools(),
-                tool_name=name,
-                phase="response",
-                payload=payload,
-            )
-        except Exception as e:  # noqa: BLE001
-            log.debug("audit response skipped for %s: %s", name, e)
-
-        duration_ms = payload["duration_ms"]
-        if error is not None:
-            log.warning("← %s FAILED %dms | %s", name, duration_ms, error)
-        elif isinstance(result, ToolRunResult):
-            log.info(
-                "← %s %s run_id=%s %dms",
-                name,
-                result.status,
-                result.run_id,
-                duration_ms,
-            )
-        else:
-            log.info("← %s ok %dms", name, duration_ms)
-
     def tool(*, name: str, description: str):
-        """Register a tool with FastMCP only if the active profile includes it."""
+        """Register a tool with FastMCP only if the active profile includes it.
+
+        Every registered tool is wrapped with structured per-call logging and
+        gains an optional ``workflow_run_id`` argument (injected here, so no
+        per-tool signature edits are needed).
+        """
         if name.removeprefix("presto.") in _enabled:
             base_tool = mcp.tool(name=name, description=description)
+            short_name = name.removeprefix("presto.")
 
             def _decorate(fn):
+                # eval_str=True resolves the string annotations produced by
+                # `from __future__ import annotations`, so the augmented
+                # signature carries real types (FastMCP needs them concrete).
+                orig_sig = inspect.signature(fn, eval_str=True)
+                new_sig = orig_sig.replace(
+                    parameters=[*orig_sig.parameters.values(), _WORKFLOW_RUN_ID_PARAM]
+                )
+
                 @functools.wraps(fn)
                 async def _wrapped(*args, **kwargs):
-                    started_at = datetime.now(UTC)
-                    request_id = _audit_request(name, args, kwargs)
+                    workflow_run_id = kwargs.pop("workflow_run_id", None)
+                    ctx = ToolCallContext(
+                        short_name,
+                        workflow_run_id=workflow_run_id,
+                        input_summary=summarize_args(kwargs),
+                    )
                     try:
                         result = await fn(*args, **kwargs)
-                    except Exception as e:  # noqa: BLE001
-                        _audit_response(
-                            name,
-                            request_id,
-                            started_at,
-                            error=f"{type(e).__name__}: {e}",
-                        )
+                    except Exception as exc:
+                        ctx.finish_error(exc)
                         raise
-                    _audit_response(name, request_id, started_at, result=result)
+                    ctx.finish_ok(result)
                     return result
 
+                _wrapped.__signature__ = new_sig
+                resolved: dict[str, object] = {
+                    p_name: p.annotation
+                    for p_name, p in new_sig.parameters.items()
+                    if p.annotation is not inspect.Parameter.empty
+                }
+                if new_sig.return_annotation is not inspect.Signature.empty:
+                    resolved["return"] = new_sig.return_annotation
+                _wrapped.__annotations__ = resolved
                 return base_tool(_wrapped)
 
             return _decorate
@@ -1765,6 +1746,360 @@ def register_tools(
     ) -> InspectArtifactsResult:
         return await asyncio.to_thread(
             _inspect_artifacts, run_id, settings=_settings_for_tools()
+        )
+
+
+    # --- Modern reporting layer (post-hoc; reads an internal workdir) --------------
+
+
+    @tool(
+        name="presto.export_candidates_csv",
+        description=(
+            "Export a normalized candidates.csv file containing all candidates found "
+            "in a PRESTO run. Use this when the user asks for candidate tables, CSV "
+            "files, detections, event lists, or machine-readable candidate outputs. "
+            "Reads raw PRESTO outputs (.singlepulse, ACCEL_*, .bestprof, groups.txt) "
+            "from runs/<run_id>/ and writes outputs/<new_run_id>/candidates.csv. "
+            "Provide run_ids (and/or workdir) identifying the runs to consolidate."
+        ),
+    )
+    async def presto_export_candidates_csv(
+        run_ids: Annotated[
+            list[str] | None,
+            Field(default=None, description="Run IDs whose raw outputs hold candidates."),
+        ] = None,
+        workdir: Annotated[
+            str | None,
+            Field(default=None, description="Optional extra workdir path relative to runs/."),
+        ] = None,
+        input_file: Annotated[
+            str | None,
+            Field(default=None, description="Original observation path (recorded in the CSV)."),
+        ] = None,
+    ) -> ReportToolResult:
+        return await asyncio.to_thread(
+            run_export_candidates_csv,
+            run_ids=run_ids,
+            workdir=workdir,
+            input_file=input_file,
+            settings=_settings_for_tools(),
+        )
+
+
+    @tool(
+        name="presto.generate_summary_json",
+        description=(
+            "Generate a structured summary.json file with observation metadata, "
+            "PRESTO workflow information, candidate counts, RFI/data quality summary, "
+            "warnings, and errors. Reads runs/<run_id>/ and writes "
+            "outputs/<new_run_id>/summary.json. Conservative: never assumes the file "
+            "contains a pulsar/FRB/RRAT."
+        ),
+    )
+    async def presto_generate_summary_json(
+        run_ids: Annotated[
+            list[str] | None,
+            Field(default=None, description="Run IDs to summarize."),
+        ] = None,
+        workdir: Annotated[
+            str | None,
+            Field(default=None, description="Optional extra workdir path relative to runs/."),
+        ] = None,
+        input_file: Annotated[
+            str | None,
+            Field(default=None, description="Original observation path (recorded in summary)."),
+        ] = None,
+    ) -> ReportToolResult:
+        return await asyncio.to_thread(
+            run_generate_summary_json,
+            run_ids=run_ids,
+            workdir=workdir,
+            input_file=input_file,
+            settings=_settings_for_tools(),
+        )
+
+
+    @tool(
+        name="presto.generate_visual_artifacts",
+        description=(
+            "Generate and publish PNG visual diagnostics from PRESTO plots and "
+            "MCP-generated visualizations. Use this when the user asks for plots, "
+            "images, diagnostics, visual inspection, or PNG artifacts. Collects "
+            "raster images, converts .ps/.eps via Ghostscript when available, and "
+            "writes outputs/<new_run_id>/visuals/ + thumbnails/."
+        ),
+    )
+    async def presto_generate_visual_artifacts(
+        run_ids: Annotated[
+            list[str] | None,
+            Field(default=None, description="Run IDs whose plots should be published."),
+        ] = None,
+        workdir: Annotated[
+            str | None,
+            Field(default=None, description="Optional extra workdir path relative to runs/."),
+        ] = None,
+    ) -> ReportToolResult:
+        return await asyncio.to_thread(
+            run_generate_visual_artifacts,
+            run_ids=run_ids,
+            workdir=workdir,
+            settings=_settings_for_tools(),
+        )
+
+
+    @tool(
+        name="presto.generate_candidate_waterfalls",
+        description=(
+            "Generate PNG and/or PDF waterfall diagnostics for selected, top-N, or "
+            "all candidates/events. Use this when the user asks for waterfalls, event "
+            "plots, FRB-like diagnostics, per-candidate visual inspection, or "
+            "per-candidate PDFs. Rendering runs through the containerized PRESTO "
+            "waterfaller. Defaults: colour map inferno, PNG on, PDF off, top-N "
+            "selection. input_file is the original observation relative to DATA_DIR."
+        ),
+    )
+    async def presto_generate_candidate_waterfalls(
+        input_file: Annotated[
+            str,
+            Field(description="Original observation file relative to DATA_DIR."),
+        ],
+        run_ids: Annotated[
+            list[str] | None,
+            Field(default=None, description="Run IDs whose candidates drive the waterfalls."),
+        ] = None,
+        workdir: Annotated[
+            str | None,
+            Field(default=None, description="Optional extra workdir path relative to runs/."),
+        ] = None,
+        candidate_selection: Annotated[
+            Literal["one", "top_n", "all"],
+            Field(default="top_n", description="Which candidates to render."),
+        ] = "top_n",
+        top_n: Annotated[
+            int,
+            Field(default=10, ge=1, le=1000, description="Count for top_n selection."),
+        ] = 10,
+        candidate_id: Annotated[
+            str | None,
+            Field(default=None, description="Candidate id for candidate_selection='one'."),
+        ] = None,
+        min_snr: Annotated[
+            float | None,
+            Field(default=None, description="Keep candidates with SNR/sigma >= this."),
+        ] = None,
+        min_dm: Annotated[
+            float | None,
+            Field(default=None, description="Keep candidates with DM >= this."),
+        ] = None,
+        max_dm: Annotated[
+            float | None,
+            Field(default=None, description="Keep candidates with DM <= this."),
+        ] = None,
+        time_window_sec: Annotated[
+            float | None,
+            Field(default=None, gt=0.0, le=600.0, description="Waterfall window length (s)."),
+        ] = None,
+        color_map: Annotated[
+            str,
+            Field(default="inferno", description="Matplotlib colormap name."),
+        ] = "inferno",
+        export_png: Annotated[
+            bool,
+            Field(default=True, description="Publish per-candidate PNG waterfalls."),
+        ] = True,
+        export_pdf: Annotated[
+            bool,
+            Field(default=False, description="Also publish per-candidate PDF waterfalls."),
+        ] = False,
+    ) -> ReportToolResult:
+        return await asyncio.to_thread(
+            run_generate_candidate_waterfalls,
+            run_ids=run_ids,
+            workdir=workdir,
+            input_file=input_file,
+            settings=_settings_for_tools(),
+            backend=_backend_for_tools(),
+            candidate_selection=candidate_selection,
+            top_n=top_n,
+            candidate_id=candidate_id,
+            min_snr=min_snr,
+            min_dm=min_dm,
+            max_dm=max_dm,
+            time_window_sec=time_window_sec,
+            color_map=color_map,
+            export_png=export_png,
+            export_pdf=export_pdf,
+        )
+
+
+    @tool(
+        name="presto.generate_report_html",
+        description=(
+            "Generate a modern offline HTML report summarizing observation metadata, "
+            "PRESTO tools executed, candidates, RFI/data quality, visual diagnostics, "
+            "waterfalls, and downloadable artifacts. Plain HTML + embedded CSS, no "
+            "external CDNs — works fully offline. Writes outputs/<new_run_id>/"
+            "report.html alongside summary.json, candidates.csv and visuals."
+        ),
+    )
+    async def presto_generate_report_html(
+        run_ids: Annotated[
+            list[str] | None,
+            Field(default=None, description="Run IDs to report on."),
+        ] = None,
+        workdir: Annotated[
+            str | None,
+            Field(default=None, description="Optional extra workdir path relative to runs/."),
+        ] = None,
+        input_file: Annotated[
+            str | None,
+            Field(default=None, description="Original observation path (recorded in report)."),
+        ] = None,
+        self_contained: Annotated[
+            bool,
+            Field(default=False, description="Base64-embed images (larger, single-file)."),
+        ] = False,
+        title: Annotated[
+            str | None,
+            Field(default=None, description="Optional report title."),
+        ] = None,
+    ) -> ReportToolResult:
+        return await asyncio.to_thread(
+            run_generate_report_html,
+            run_ids=run_ids,
+            workdir=workdir,
+            input_file=input_file,
+            settings=_settings_for_tools(),
+            self_contained=self_contained,
+            title=title,
+        )
+
+
+    @tool(
+        name="presto.generate_report_markdown",
+        description=(
+            "Generate a lightweight Markdown report summarizing the PRESTO run, "
+            "candidates, metadata, warnings, and artifact links. Writes "
+            "outputs/<new_run_id>/report.md."
+        ),
+    )
+    async def presto_generate_report_markdown(
+        run_ids: Annotated[
+            list[str] | None,
+            Field(default=None, description="Run IDs to report on."),
+        ] = None,
+        workdir: Annotated[
+            str | None,
+            Field(default=None, description="Optional extra workdir path relative to runs/."),
+        ] = None,
+        input_file: Annotated[
+            str | None,
+            Field(default=None, description="Original observation path (recorded in report)."),
+        ] = None,
+        title: Annotated[
+            str | None,
+            Field(default=None, description="Optional report title."),
+        ] = None,
+    ) -> ReportToolResult:
+        return await asyncio.to_thread(
+            run_generate_report_markdown,
+            run_ids=run_ids,
+            workdir=workdir,
+            input_file=input_file,
+            settings=_settings_for_tools(),
+            title=title,
+        )
+
+
+    @tool(
+        name="presto.generate_modern_report_bundle",
+        description=(
+            "Generate a complete modern reporting bundle for a PRESTO run, including "
+            "summary.json, candidates.csv, PNG visuals, thumbnails, waterfall PDFs, "
+            "report.html, and report.md according to the requested artifact policy. "
+            "Preferred tool when the user asks for a modern report, an HTML report, a "
+            "dashboard, a full reporting bundle, or an astronomer-facing summary. The "
+            "LLM sets the wants_* intention flags from the user's request; with no "
+            "flag set, the full report bundle is produced. Set wants_waterfalls / "
+            "input_file to render per-candidate waterfalls (containerized)."
+        ),
+    )
+    async def presto_generate_modern_report_bundle(
+        run_ids: Annotated[
+            list[str] | None,
+            Field(default=None, description="Run IDs to bundle into the report."),
+        ] = None,
+        workdir: Annotated[
+            str | None,
+            Field(default=None, description="Optional extra workdir path relative to runs/."),
+        ] = None,
+        input_file: Annotated[
+            str | None,
+            Field(default=None, description="Original observation file relative to DATA_DIR."),
+        ] = None,
+        wants_metadata_only: Annotated[
+            bool, Field(default=False, description="Only summary.json.")
+        ] = False,
+        wants_candidates: Annotated[
+            bool, Field(default=False, description="summary.json + candidates.csv.")
+        ] = False,
+        wants_visuals: Annotated[
+            bool, Field(default=False, description="PNG visuals + thumbnails + HTML.")
+        ] = False,
+        wants_waterfalls: Annotated[
+            bool, Field(default=False, description="Per-candidate waterfall PNGs + HTML.")
+        ] = False,
+        wants_waterfall_pdf: Annotated[
+            bool, Field(default=False, description="Also per-candidate waterfall PDFs.")
+        ] = False,
+        wants_report: Annotated[
+            bool, Field(default=False, description="Full modern report bundle.")
+        ] = False,
+        wants_no_extra_files: Annotated[
+            bool,
+            Field(default=False, description="Publish only explicitly requested artifacts."),
+        ] = False,
+        wants_original_presto_outputs: Annotated[
+            bool,
+            Field(default=False, description="Also publish raw PRESTO files (presto_raw_exports/)."),
+        ] = False,
+        title: Annotated[
+            str | None, Field(default=None, description="Optional report title.")
+        ] = None,
+        waterfall_cmap: Annotated[
+            str, Field(default="inferno", description="Waterfall colormap.")
+        ] = "inferno",
+        self_contained_html: Annotated[
+            bool, Field(default=False, description="Base64-embed images in report.html.")
+        ] = False,
+        waterfall_selection: Annotated[
+            Literal["one", "top_n", "all"],
+            Field(default="top_n", description="Waterfall candidate selection."),
+        ] = "top_n",
+        waterfall_top_n: Annotated[
+            int, Field(default=10, ge=1, le=1000, description="Top-N count for waterfalls.")
+        ] = 10,
+    ) -> ReportToolResult:
+        return await asyncio.to_thread(
+            run_generate_modern_report_bundle,
+            run_ids=run_ids,
+            workdir=workdir,
+            input_file=input_file,
+            settings=_settings_for_tools(),
+            backend=_backend_for_tools(),
+            wants_metadata_only=wants_metadata_only,
+            wants_candidates=wants_candidates,
+            wants_visuals=wants_visuals,
+            wants_waterfalls=wants_waterfalls,
+            wants_waterfall_pdf=wants_waterfall_pdf,
+            wants_report=wants_report,
+            wants_no_extra_files=wants_no_extra_files,
+            wants_original_presto_outputs=wants_original_presto_outputs,
+            title=title,
+            waterfall_cmap=waterfall_cmap,
+            self_contained_html=self_contained_html,
+            waterfall_selection=waterfall_selection,
+            waterfall_top_n=waterfall_top_n,
         )
 
 

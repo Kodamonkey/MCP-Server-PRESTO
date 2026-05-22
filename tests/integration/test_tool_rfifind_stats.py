@@ -23,13 +23,13 @@ def settings(tmp_path: Path) -> Settings:
     prior = runs / PRIOR_RUN_ID / "artifacts"
     prior.mkdir(parents=True)
     (prior / "rfi.stats").write_bytes(b"s")
+    (prior / "rfi.inf").write_text(" Data file name without suffix          =  rfi\n", encoding="utf-8")
     (prior / "rfi.mask").write_bytes(b"m")
     return Settings(
         image="alex88ridolfi/presto5:png",
         data_dir=data.resolve(),
         runs_dir=runs.resolve(),
         outputs_dir=(tmp_path / "outputs").resolve(),
-        logs_dir=(tmp_path / "logs").resolve(),
         default_cpus=2.0, default_memory_mb=1024, default_timeout_s=60,
         network="none", skip_healthcheck=True,
     )
@@ -64,13 +64,13 @@ def test_rfifind_stats_parses_summary(settings: Settings) -> None:
 
     argv = backend.calls[0].invocation.argv
     assert "rfifind_stats.py" in argv
-    assert f"/runs/{PRIOR_RUN_ID}/artifacts/rfi.stats" in argv
-    assert f"/runs/{PRIOR_RUN_ID}/artifacts/rfi.mask" in argv
-
-    # /runs mounted read-only.
-    mounts = [a for a in argv if a.startswith("type=bind,") and "dst=/runs" in a]
-    assert len(mounts) == 1
-    assert mounts[0].endswith(",readonly")
+    assert "/outputs/artifacts/rfi.stats" in argv
+    # PRESTO rfifind_stats.py accepts only a single positional input.
+    assert "/outputs/artifacts/rfi.mask" not in argv
+    assert f"/runs/{PRIOR_RUN_ID}/artifacts/rfi.stats" not in argv
+    assert "--workdir" in argv and "/outputs/artifacts" in argv
+    run_dir = settings.runs_dir / result.run_id
+    assert (run_dir / "artifacts" / "rfi.inf").is_file()
 
 
 def test_rfifind_stats_rejects_bad_run_id(settings: Settings) -> None:

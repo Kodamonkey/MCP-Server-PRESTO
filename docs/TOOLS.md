@@ -421,17 +421,24 @@ Corrupt images are skipped (non-fatal if at least one valid image remains);
 duplicate images (same content hash) are collapsed; page order is
 deterministic.
 
-## Consumable exports (automatic)
+## Modern reporting tools (`outputs/`)
 
-PRESTO tools do not copy files to `PRESTO_OUTPUTS_DIR` themselves. After each
-run completes, the executor exports selected artifacts from
-`runs/<run_id>/artifacts/` into:
+PRESTO runs are not auto-exported. The modern reporting layer is **on demand**:
+7 `presto.*` tools read one or more `runs/<run_id>/` workdirs and publish clean
+artifacts into a fresh `outputs/<run_id>/`.
 
-- `outputs/by_run/<run_id>/<categoria>/...` (astronomy-oriented categories),
-- `outputs/index/events.v2.jsonl` (enriched stream),
-- `outputs/index/catalog.v2.json` (grouped snapshot),
-- plus `outputs/index.jsonl` legacy compatibility rows.
+| Tool | Output |
+|------|--------|
+| `presto.export_candidates_csv` | `candidates.csv` — every parseable candidate |
+| `presto.generate_summary_json` | `summary.json` — observation + workflow summary |
+| `presto.generate_visual_artifacts` | `visuals/*.png` + `thumbnails/*.png` |
+| `presto.generate_candidate_waterfalls` | `waterfalls/<id>.png` (+ `.pdf`) — via the containerized waterfaller |
+| `presto.generate_report_html` | offline `report.html` |
+| `presto.generate_report_markdown` | `report.md` |
+| `presto.generate_modern_report_bundle` | the full bundle (intention-routed) |
 
-`PRESTO_EXPORT_CLASSES` still gates export by role (`final`/`pipeline`), but
-folder layout is now category-first (`candidatos`, `eventos`, `timing`, `rfi`,
-`fold`, `visuales`, `reportes`, `intermedios`).
+Every reporting tool returns a `ReportToolResult` (`run_id`, `status`,
+`output_dir`, artifact list, warnings, errors). Raw PRESTO intermediates are
+never published by default — see
+[artifact_policy.md](./artifact_policy.md) and
+[modern_reporting_layer.md](./modern_reporting_layer.md).

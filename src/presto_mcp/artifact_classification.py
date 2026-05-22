@@ -1,57 +1,12 @@
-"""Filename heuristics for PRESTO run artifacts."""
+"""Filename heuristics for PRESTO run artifacts.
+
+Maps an artifact basename to a coarse :class:`ArtifactType`. Used by
+``summarize_run`` / ``inspect_artifacts`` and by the modern reporting layer.
+"""
 
 from __future__ import annotations
 
-from typing import Literal
-
 from .models import ArtifactType
-
-ExportClass = Literal["final", "pipeline"]
-OutputCategory = Literal[
-    "candidatos",
-    "eventos",
-    "timing",
-    "rfi",
-    "fold",
-    "visuales",
-    "reportes",
-    "intermedios",
-]
-AstronomerUtility = Literal["alta", "media", "baja"]
-
-_SKIP_EXPORT_NAMES: frozenset[str] = frozenset(
-    {
-        "waterfaller_headless.py",
-    }
-)
-
-_SKIP_EXPORT_SUFFIXES: frozenset[str] = frozenset(
-    {
-        ".py",
-    }
-)
-
-_FINAL_TYPES: frozenset[ArtifactType] = frozenset(
-    {
-        ArtifactType.PLOTS,
-        ArtifactType.TIMING,
-        ArtifactType.ACCEL_CANDIDATES,
-        ArtifactType.SINGLE_PULSE,
-        ArtifactType.SPD,
-        ArtifactType.FOLD,
-    }
-)
-
-_PIPELINE_TYPES: frozenset[ArtifactType] = frozenset(
-    {
-        ArtifactType.RFI,
-        ArtifactType.SINGLE_PULSE,
-        ArtifactType.SPD,
-        ArtifactType.FFT,
-        ArtifactType.TIME_SERIES,
-        ArtifactType.ACCEL_CANDIDATES,
-    }
-)
 
 
 def classify_artifact(name: str) -> ArtifactType:
@@ -81,61 +36,4 @@ def classify_artifact(name: str) -> ArtifactType:
     return ArtifactType.OTHER
 
 
-def export_class_for(artifact_type: ArtifactType) -> ExportClass | None:
-    """Map artifact type to consumable export bucket, or None to skip."""
-    if artifact_type in _FINAL_TYPES:
-        return "final"
-    if artifact_type in _PIPELINE_TYPES or artifact_type == ArtifactType.OTHER:
-        return "pipeline"
-    return "pipeline"
-
-
-def output_category_for(name: str, artifact_type: ArtifactType) -> OutputCategory:
-    """Map one artifact into an astronomer-facing output category."""
-    n = name.lower()
-    if artifact_type == ArtifactType.ACCEL_CANDIDATES:
-        return "candidatos"
-    if artifact_type in (ArtifactType.SINGLE_PULSE, ArtifactType.SPD):
-        return "eventos"
-    if artifact_type == ArtifactType.TIMING:
-        return "timing"
-    if artifact_type == ArtifactType.RFI:
-        return "rfi"
-    if artifact_type == ArtifactType.FOLD:
-        return "fold"
-    if artifact_type == ArtifactType.PLOTS:
-        return "reportes" if n.endswith(".pdf") else "visuales"
-    return "intermedios"
-
-
-def astronomer_utility_for(artifact_type: ArtifactType) -> AstronomerUtility:
-    """Estimated scientific utility for quick triage in outputs index."""
-    if artifact_type in (
-        ArtifactType.ACCEL_CANDIDATES,
-        ArtifactType.SINGLE_PULSE,
-        ArtifactType.SPD,
-        ArtifactType.TIMING,
-        ArtifactType.PLOTS,
-        ArtifactType.FOLD,
-    ):
-        return "alta"
-    if artifact_type in (ArtifactType.RFI, ArtifactType.TIME_SERIES, ArtifactType.FFT):
-        return "media"
-    return "baja"
-
-
-def should_skip_export(name: str) -> bool:
-    n = name.lower()
-    return name in _SKIP_EXPORT_NAMES or any(n.endswith(ext) for ext in _SKIP_EXPORT_SUFFIXES)
-
-
-__all__ = [
-    "AstronomerUtility",
-    "ExportClass",
-    "OutputCategory",
-    "astronomer_utility_for",
-    "classify_artifact",
-    "export_class_for",
-    "output_category_for",
-    "should_skip_export",
-]
+__all__ = ["classify_artifact"]

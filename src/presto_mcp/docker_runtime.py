@@ -7,6 +7,7 @@ Desktop on Windows/macOS). It does not keep a long-lived PRESTO container runnin
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -15,9 +16,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .logging_setup import phase_logger
-
-log = phase_logger("docker", "presto_mcp.docker_runtime")
+log = logging.getLogger("presto_mcp.docker_runtime")
 
 _DOCKER_INFO_TIMEOUT_S = 10
 _DOCKER_IMAGE_INSPECT_TIMEOUT_S = 15

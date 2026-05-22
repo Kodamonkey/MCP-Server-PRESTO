@@ -183,7 +183,13 @@ def ensure_inside_root(path: Path, root: Path) -> None:
         raise PathSecurityError(f"path {p} is not inside root {r}") from e
 
 
-def _new_run_id() -> str:
+def new_run_id() -> str:
+    """Return a fresh ``YYYYMMDDTHHMMSSZ-<6 base32>`` id.
+
+    Shared by the executor (per-tool run dirs), the modern reporting layer
+    (report bundles) and the observability layer (server sessions, workflow
+    runs, tool calls). Stdlib only; filesystem-safe on Windows.
+    """
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     # 4 random bytes → 8 base32 chars; trim to 6 (30 bits of entropy).
     nonce = base64.b32encode(os.urandom(4)).decode("ascii").rstrip("=")[:6]
@@ -207,7 +213,7 @@ def create_run_dir(tool_name: str, runs_root: Path) -> tuple[str, Path]:
     runs_root.mkdir(parents=True, exist_ok=True)
 
     for _ in range(5):
-        run_id = _new_run_id()
+        run_id = new_run_id()
         run_dir = runs_root / run_id
         try:
             run_dir.mkdir(parents=True, exist_ok=False)

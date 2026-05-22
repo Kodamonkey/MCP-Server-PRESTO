@@ -107,6 +107,14 @@ TOOL_METADATA: dict[str, ToolMeta] = {
     "compare_periods": ToolMeta("review", ("par",), ("matches",)),
     "binary_info": ToolMeta("review", ("par",), ("summary",)),
     "compile_candidate_report_pdf": ToolMeta("review", ("run_id",), ("report",)),
+    # modern reporting / artifact layer (post-hoc, reads a workdir)
+    "export_candidates_csv": ToolMeta("reporting", ("run_id",), ("report",)),
+    "generate_summary_json": ToolMeta("reporting", ("run_id",), ("summary",)),
+    "generate_visual_artifacts": ToolMeta("reporting", ("run_id",), ("plot",)),
+    "generate_candidate_waterfalls": ToolMeta("reporting", ("run_id", "raw"), ("plot",)),
+    "generate_report_html": ToolMeta("reporting", ("run_id",), ("report",)),
+    "generate_report_markdown": ToolMeta("reporting", ("run_id",), ("report",)),
+    "generate_modern_report_bundle": ToolMeta("reporting", ("run_id", "raw"), ("report",)),
 }
 
 
@@ -171,6 +179,13 @@ PROFILES: dict[str, frozenset[str]] = {
         "pfd2png",
         "waterfaller",
         "compile_candidate_report_pdf",
+        "export_candidates_csv",
+        "generate_summary_json",
+        "generate_visual_artifacts",
+        "generate_candidate_waterfalls",
+        "generate_report_html",
+        "generate_report_markdown",
+        "generate_modern_report_bundle",
     },
     "advanced": _CORE
     | {

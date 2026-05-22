@@ -8,13 +8,13 @@ state.
 
 from __future__ import annotations
 
+import logging
 import os
 import stat
 import sys
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
 
 from dotenv import load_dotenv
 
@@ -28,9 +28,8 @@ from .docker_runtime import (
     resolve_container_python,
     resolve_docker_bin,
 )
-from .logging_setup import phase_logger
 
-log = phase_logger("startup", "presto_mcp.config")
+log = logging.getLogger("presto_mcp.config")
 
 _RESOLVED_CONTAINER_PYTHON: str | None = None
 _DEFAULT_CONTAINER_PYTHON = "python3"
@@ -92,18 +91,6 @@ def _default_auto_start_docker() -> bool:
     return sys.platform in ("win32", "darwin")
 
 
-def _env_csv_lower_set(name: str, default: str) -> frozenset[str]:
-    raw = os.environ.get(name, default)
-    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
-
-
-def _env_export_on_status() -> Literal["SUCCESS", "ALWAYS"]:
-    raw = os.environ.get("PRESTO_EXPORT_ON_STATUS", "SUCCESS").strip().upper()
-    if raw == "ALWAYS":
-        return "ALWAYS"
-    return "SUCCESS"
-
-
 def _env_int_min(name: str, default: int, minimum: int) -> int:
     raw = os.environ.get(name)
     if raw is None:
@@ -125,7 +112,6 @@ class Settings:
     data_dir: Path
     runs_dir: Path
     outputs_dir: Path
-    logs_dir: Path
     default_cpus: float
     default_memory_mb: int
     default_timeout_s: int
@@ -136,12 +122,7 @@ class Settings:
     auto_start_docker_startup_wait_s: int = 45
     pull_image_on_start: bool = True
     pull_image_timeout_s: int = 900
-    log_to_file: bool = True
     python_bin: str = ""
-    export_consumables: bool = True
-    export_classes: frozenset[str] = frozenset({"final", "pipeline"})
-    export_max_bytes: int = 500_000_000
-    export_on_status: Literal["SUCCESS", "ALWAYS"] = "SUCCESS"
     max_concurrent_runs: int = 1
     tool_profile: str = "all"
 
@@ -163,7 +144,6 @@ def _load_from_env() -> Settings:
         data_dir=_env_path("PRESTO_DATA_DIR", "./data"),
         runs_dir=_env_path("PRESTO_RUNS_DIR", "./runs"),
         outputs_dir=_env_path("PRESTO_OUTPUTS_DIR", "./outputs"),
-        logs_dir=_env_path("PRESTO_LOGS_DIR", "./logs"),
         default_cpus=float(os.environ.get("PRESTO_DEFAULT_CPUS", "4")),
         default_memory_mb=int(os.environ.get("PRESTO_DEFAULT_MEMORY_MB", "8192")),
         default_timeout_s=int(os.environ.get("PRESTO_DEFAULT_TIMEOUT_SECONDS", "1800")),
@@ -184,12 +164,7 @@ def _load_from_env() -> Settings:
         pull_image_timeout_s=_env_int_min(
             "PRESTO_PULL_IMAGE_TIMEOUT_SECONDS", 900, 60
         ),
-        log_to_file=_env_bool("PRESTO_LOG_TO_FILE", True),
         python_bin=os.environ.get("PRESTO_PYTHON_BIN", "").strip(),
-        export_consumables=_env_bool("PRESTO_EXPORT_CONSUMABLES", True),
-        export_classes=_env_csv_lower_set("PRESTO_EXPORT_CLASSES", "final,pipeline"),
-        export_max_bytes=_env_int_min("PRESTO_EXPORT_MAX_BYTES", 500_000_000, 1),
-        export_on_status=_env_export_on_status(),
         max_concurrent_runs=_env_int_min("PRESTO_MAX_CONCURRENT_RUNS", 2, 1),
         tool_profile=os.environ.get("PRESTO_TOOL_PROFILE", "all").strip().lower(),
     )
@@ -202,8 +177,8 @@ def get_settings() -> Settings:
 
 
 def ensure_runtime_dirs(s: Settings) -> None:
-    """Create runs/outputs/logs if missing. ``data/`` must already exist."""
-    for d in (s.runs_dir, s.outputs_dir, s.logs_dir):
+    """Create runs/outputs if missing. ``data/`` must already exist."""
+    for d in (s.runs_dir, s.outputs_dir):
         d.mkdir(parents=True, exist_ok=True)
 
 

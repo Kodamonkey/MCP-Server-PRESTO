@@ -55,7 +55,6 @@ def settings_with_run(tmp_path: Path) -> tuple[Settings, str]:
         data_dir=tmp_path / "data",
         runs_dir=runs.resolve(),
         outputs_dir=tmp_path / "outputs",
-        logs_dir=tmp_path / "logs",
         default_cpus=2.0,
         default_memory_mb=1024,
         default_timeout_s=60,

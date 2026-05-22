@@ -18,11 +18,12 @@ sandboxing, and orchestration live in the modules under ``presto_mcp/``.
 from __future__ import annotations
 
 import sys
+from contextlib import suppress
 
 from mcp.server.fastmcp import FastMCP
 
-from .audit_log import close_audit_session, initialize_audit_session
 from .config import (
+    REPO_ROOT,
     HealthCheckError,
     Settings,
     ensure_runtime_dirs,
@@ -31,12 +32,10 @@ from .config import (
     run_health_check,
 )
 from .docker_backend import BackendProtocol, DockerBackend
-from .logging_setup import (
-    bind_session_log,
-    configure_logging,
-    phase_logger,
-    unbind_session_log,
-)
+from .observability.event_types import EventType
+from .observability.logging_config import load_logging_settings
+from .observability.structured_logger import init_structured_logger
+from .observability.tool_logging import set_logging_settings
 from .server_prompts import register_prompts
 from .server_resources import (
     _resource_artifact,
@@ -61,8 +60,6 @@ __all__ = [
     "_resource_stderr",
     "_resource_stdout",
 ]
-
-log = phase_logger("server", "presto_mcp.server")
 
 # --- App + backend------------------------------------------------
 
@@ -114,29 +111,35 @@ register_prompts(mcp)
 
 def main() -> None:
     s = get_settings()
-    configure_logging(log_to_file=s.log_to_file)
     ensure_runtime_dirs(s)
+
+    # --- Observability: start the server-session structured logger -------------
+    log_settings = load_logging_settings(REPO_ROOT)
+    set_logging_settings(log_settings)
+    slog = init_structured_logger(log_settings)
+    slog.log_event(
+        EventType.SERVER_STARTUP,
+        "presto-mcp server starting",
+        metadata={"image": s.image, "tool_profile": s.tool_profile},
+    )
+
     try:
         run_health_check(s)
     except Exception as e:  # noqa: BLE001
         if isinstance(e, HealthCheckError):
             banner = format_health_check_failure(e)
             print(banner, file=sys.stderr, flush=True)
-            log.error("startup health check failed [%s]: %s", e.code, e.summary)
-        else:
-            log.error("startup health check failed: %s", e)
+        slog.log_event(
+            EventType.SERVER_SHUTDOWN,
+            "presto-mcp server aborted: health check failed",
+            level="ERROR",
+            status="failed",
+            error_message=str(e),
+        )
         raise SystemExit(2) from e
 
     set_settings(s)
-    session_id: str | None = None
-    log.info("starting presto-mcp (profile=%s)", s.tool_profile)
-    session_id = initialize_audit_session(s)
-    session_file = bind_session_log(s.logs_dir, session_id)
-    log.info("ready | image=%s", s.image)
-    log.info("ready | data=%s", s.data_dir)
-    log.info("ready | tools profile=%s", s.tool_profile)
-    if session_file is not None:
-        log.info("session jsonl: %s", session_file)
+    slog.log_event(EventType.SERVER_STARTUP, "presto-mcp server ready", status="running")
     if sys.stdin.isatty():
         print(
             "\n"
@@ -147,15 +150,10 @@ def main() -> None:
             flush=True,
         )
     try:
-        mcp.run()
-    except KeyboardInterrupt:
-        # Normal shutdown path in local terminals; avoid noisy anyio traceback.
-        log.info("stopped (Ctrl+C)")
+        with suppress(KeyboardInterrupt):
+            mcp.run()
     finally:
-        if session_id is not None:
-            close_audit_session(s)
-            log.info("session closed: %s", session_id)
-        unbind_session_log()
+        slog.log_event(EventType.SERVER_SHUTDOWN, "presto-mcp server stopped")
 
 
 if __name__ == "__main__":

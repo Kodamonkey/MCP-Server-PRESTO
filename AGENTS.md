@@ -6,7 +6,7 @@ Portable instructions for any coding agent working in this repo.
 
 Typed, sandboxed MCP server that exposes **PRESTO** (radio-astronomy / pulsar) routines to LLMs through a sandboxed Docker executor. PRESTO-only — not PrestoDB, Apache Pulsar, PulsarX, TransientX, riptide, Heimdall, or PULSAR_MINER.
 
-The server registers **38** `presto.*` tools (profile-gated via `PRESTO_TOOL_PROFILE`), plus MCP resources and prompts. See [README.md](./README.md) for the full tool table and [TOOLS.md](./docs/TOOLS.md) for utility-tool details.
+The server registers **45** `presto.*` tools (profile-gated via `PRESTO_TOOL_PROFILE`) — 38 PRESTO/utility tools plus 7 modern-reporting tools — alongside MCP resources and prompts. See [README.md](./README.md) for the full tool table and [TOOLS.md](./docs/TOOLS.md) for utility-tool details.
 
 ## Stack
 
@@ -38,16 +38,18 @@ The server registers **38** `presto.*` tools (profile-gated via `PRESTO_TOOL_PRO
 ```
 src/presto_mcp/
   server.py            # FastMCP app — only file that imports FastMCP
-  server_tools.py      # @mcp.tool registration (38 tools)
+  server_tools.py      # @mcp.tool registration (45 tools)
   server_resources.py  # MCP resources
   server_prompts.py    # MCP prompts
   config.py            # env-driven settings, startup health check
   executor.py          # paths → backend → parse → manifest
   docker_backend.py    # argv builder + subprocess.run + timeout/kill
-  path_security.py     # resolve_input_path, create_run_dir
+  path_security.py     # resolve_input_path, create_run_dir, new_run_id
   policies.py          # numeric guards
   parsers/             # stdout-only PRESTO parsers
-  tools/               # one run_<name>() per tool
+  tools/               # one run_<name>() per tool (+ reporting.py)
+  reporting/           # modern artifact/report layer → outputs/<run_id>/
+  observability/       # structured logging + RunTracker → logs/
   bin/                 # waterfaller_headless.py (copied into run dir)
 tests/
   unit/ integration/ e2e/

@@ -9,6 +9,7 @@ This module is async-free on purpose. Tools wrap calls in ``asyncio.to_thread``.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -19,10 +20,8 @@ from typing import Generic, Literal, TypeVar
 from pydantic import BaseModel
 
 from .config import Settings
-from .consumable_exports import export_run_consumables
 from .docker_backend import BackendProtocol, build_invocation
 from .errors import ManifestError, PathSecurityError
-from .logging_setup import phase_logger
 from .manifest import write_manifest
 from .models import (
     BackendResult,
@@ -40,7 +39,7 @@ from .path_security import (
     resolve_run_artifact,
 )
 
-log = phase_logger("run", "presto_mcp.executor")
+log = logging.getLogger("presto_mcp.executor")
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -131,6 +130,9 @@ def _resolve_one(path: str, root: InputRoot, settings: Settings) -> tuple[Path, 
 
 
 def _persist_logs(run_dir: Path, result: BackendResult) -> tuple[str, str]:
+    # Defensive: external sync/cleanup tools can transiently remove empty run dirs.
+    # Recreate before writing logs so backend failures don't raise FileNotFoundError.
+    run_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = run_dir / "stdout.log"
     stderr_path = run_dir / "stderr.log"
     stdout_path.write_text(result.stdout, encoding="utf-8", errors="replace")
@@ -320,14 +322,7 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
         )
 
     manifest_uri, stdout_uri, stderr_uri, artifact_uris = _result_uris(run_id, artifacts)
-    export_run_consumables(
-        prepared.settings,
-        run_id=run_id,
-        tool_name=spec.tool_name,
-        run_dir=run_dir,
-        status=manifest.status,
-        manifest_uri=manifest_uri,
-    )
+    _log_presto_command(manifest, backend_result)
     log.info(
         "done %s run_id=%s status=%s %.1fs",
         spec.tool_name,
@@ -465,16 +460,7 @@ def _write_background_failure(prepared: _PreparedRun[T], exc: Exception) -> None
     except ManifestError:
         log.exception("could not write background failure manifest for %s", prepared.run_id)
         return
-
-    manifest_uri, _, _, _ = _result_uris(prepared.run_id, artifacts)
-    export_run_consumables(
-        prepared.settings,
-        run_id=prepared.run_id,
-        tool_name=prepared.spec.tool_name,
-        run_dir=prepared.run_dir,
-        status=manifest.status,
-        manifest_uri=manifest_uri,
-    )
+    _log_presto_command(manifest, None)
 
 
 def _safe_digest(backend: BackendProtocol, image: str) -> str | None:
@@ -483,6 +469,47 @@ def _safe_digest(backend: BackendProtocol, image: str) -> str | None:
     except Exception as e:  # noqa: BLE001
         log.warning("inspect_image_digest failed: %s", e)
         return None
+
+
+def _log_presto_command(manifest: RunManifest, backend_result: BackendResult | None) -> None:
+    """Emit one structured PRESTO-command event to the server-session log.
+
+    Best-effort: observability must never break a run. No-op when the
+    structured logger has not been started (e.g. under tests).
+    """
+    try:
+        from .observability.event_types import EventType
+        from .observability.redaction import summarize_stream
+        from .observability.structured_logger import get_structured_logger
+    except Exception:  # noqa: BLE001
+        return
+    slog = get_structured_logger()
+    if slog is None:
+        return
+    try:
+        meta: dict[str, object] = {
+            "presto_argv": manifest.presto_argv,
+            "exit_code": manifest.exit_code,
+            "generated_files": manifest.artifacts,
+            "stdout_path": manifest.stdout_path,
+            "stderr_path": manifest.stderr_path,
+        }
+        if backend_result is not None:
+            meta["stdout_tail"] = summarize_stream(backend_result.stdout, max_tail_lines=40)
+            meta["stderr_tail"] = summarize_stream(backend_result.stderr, max_tail_lines=40)
+        slog.log_event(
+            EventType.PRESTO_COMMAND_COMPLETED,
+            f"presto command {manifest.tool} finished ({manifest.status})",
+            level="ERROR" if manifest.status != RunStatus.SUCCESS else "INFO",
+            tool_name=manifest.tool,
+            run_id=manifest.run_id,
+            status=str(manifest.status),
+            duration_ms=(manifest.duration_s or 0.0) * 1000.0,
+            artifact_paths=manifest.artifacts,
+            metadata=meta,
+        )
+    except Exception:  # noqa: BLE001
+        log.debug("structured presto-command log failed", exc_info=True)
 
 
 # Convenience re-exports kept here so tool modules don't import models directly

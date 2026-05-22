@@ -27,7 +27,6 @@ def settings_and_data(tmp_path: Path) -> Settings:
         data_dir=data.resolve(),
         runs_dir=(tmp_path / "runs").resolve(),
         outputs_dir=(tmp_path / "outputs").resolve(),
-        logs_dir=(tmp_path / "logs").resolve(),
         default_cpus=2.0,
         default_memory_mb=1024,
         default_timeout_s=60,

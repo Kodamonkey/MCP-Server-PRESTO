@@ -33,3 +33,11 @@ class ParserError(PrestoMcpError):
 
 class ManifestError(PrestoMcpError):
     """A manifest could not be written or loaded."""
+
+
+class ReportingError(PrestoMcpError):
+    """The modern reporting layer rejected an artifact or report request.
+
+    Raised for forbidden public extensions, accidental overwrites, and
+    malformed report inputs. Path traversal still raises ``PathSecurityError``.
+    """

@@ -20,7 +20,9 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 import matplotlib
 
 matplotlib.use("Agg", force=True)
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+from matplotlib.backend_bases import FigureCanvasBase
 
 OUTPUT = os.environ.get("WATERFALL_OUTPUT", "waterfall.png")
 _PSRFITS_EXTS = (".fits", ".sf", ".psrfits")
@@ -146,8 +148,36 @@ def _headless_show(*_args: object, **_kwargs: object) -> None:
 
 plt.show = _headless_show  # type: ignore[method-assign]
 
+
+def _patch_canvas_window_title() -> None:
+    """Compat shim for Agg/no-window backends."""
+    if hasattr(FigureCanvasBase, "set_window_title"):
+        return
+
+    def _no_window_title(self: FigureCanvasBase, _title: str) -> None:
+        return
+
+    FigureCanvasBase.set_window_title = _no_window_title  # type: ignore[attr-defined]
+
+
+def _patch_matplotlib_cmap_compat() -> None:
+    """Compat shim for older PRESTO code expecting ``matplotlib.cm.cmap_d``."""
+    if hasattr(cm, "cmap_d"):
+        return
+    cmap_d: dict[str, object] = {}
+    # ``plt.colormaps`` exists in modern matplotlib and returns all registered maps.
+    for name in plt.colormaps():
+        try:
+            cmap_d[name] = matplotlib.colormaps[name]
+        except Exception:
+            continue
+    cm.cmap_d = cmap_d  # type: ignore[attr-defined]
+
+
 if __name__ == "__main__":
     _patch_psrfits_nchnoffs()
+    _patch_canvas_window_title()
+    _patch_matplotlib_cmap_compat()
     tool_argv = _maybe_convert_psrfits_input(sys.argv[1:])
     sys.argv = [PRESTO_WATERFALLER, *tool_argv]
     runpy.run_path(PRESTO_WATERFALLER, run_name="__main__")

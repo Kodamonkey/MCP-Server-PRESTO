@@ -353,7 +353,6 @@ def run_validate_environment(
     checks.extend(_check_data_dir(s))
     checks.append(_check_writable_dir("runs", s.runs_dir))
     checks.append(_check_writable_dir("outputs", s.outputs_dir))
-    checks.append(_check_writable_dir("logs", s.logs_dir))
 
     docker, docker_checks = _check_docker_cli()
     checks.extend(docker_checks)

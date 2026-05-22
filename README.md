@@ -63,8 +63,7 @@ If you need deeper control, you can add any of these variables to `.env`:
 | `PRESTO_IMAGE` | `alex88ridolfi/presto5:png` | Use a different PRESTO runtime image/tag. |
 | `PRESTO_DATA_DIR` | `./data` | Your observation files live outside the repo. |
 | `PRESTO_RUNS_DIR` | `./runs` | Save manifests near your data or in another disk. |
-| `PRESTO_OUTPUTS_DIR` | `./outputs` | Astronomer-facing export area (`by_run/` + enriched indexes). |
-| `PRESTO_LOGS_DIR` | `./logs` | Redirect server logs to a custom location. |
+| `PRESTO_OUTPUTS_DIR` | `./outputs` | Modern reporting bundles (`outputs/<run_id>/`). |
 | `PRESTO_TOOL_PROFILE` | `all` | Expose only a subset of tools (`core`, `periodic`, etc.). |
 | `PRESTO_AUTO_START_DOCKER` | Windows/macOS: `true`; Linux: `false` | Disable/enable Docker Desktop auto-start behavior. |
 | `PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS` | `120` | Give Docker more total time to become available. |
@@ -77,13 +76,12 @@ If you need deeper control, you can add any of these variables to `.env`:
 | `PRESTO_MAX_CONCURRENT_RUNS` | `2` | Allow multiple concurrent Docker runs (advanced). |
 | `PRESTO_NETWORK` | `none` | Keep isolated; change only for debugging. |
 | `PRESTO_SKIP_HEALTHCHECK` | `false` | Tests/debug only; do not use in production. |
-| `PRESTO_LOG_LEVEL` | `INFO` | Console/file verbosity (`DEBUG` for troubleshooting). |
-| `PRESTO_LOG_TO_FILE` | `true` | Mirror stderr logs into `sessions/<session_id>.jsonl` (`kind=log` lines). |
 | `PRESTO_PYTHON_BIN` | *(auto)* | `python3` or `python` inside the image; empty = detect at startup. |
-| `PRESTO_EXPORT_CONSUMABLES` | `true` | Copy useful artifacts from each run into `PRESTO_OUTPUTS_DIR`. |
-| `PRESTO_EXPORT_CLASSES` | `final,pipeline` | Export role filter: `final` (high-value review artifacts) and/or `pipeline` (intermediate processing artifacts). |
-| `PRESTO_EXPORT_MAX_BYTES` | `500000000` | Skip files larger than this when exporting. |
-| `PRESTO_EXPORT_ON_STATUS` | `SUCCESS` | Export only on successful runs (`ALWAYS` for debug). |
+| `PRESTO_MCP_LOG_LEVEL` | `INFO` | Structured-log level (`DEBUG`/`INFO`/`WARNING`/`ERROR`). |
+| `PRESTO_MCP_LOG_DIR` | `./logs` | Base directory for server-session + per-run logs. |
+| `PRESTO_MCP_JSON_LOGS` | `true` | Write machine-readable JSONL logs alongside human logs. |
+| `PRESTO_MCP_LIVE_STATUS` | `true` | Continuously update `logs/runs/<run_id>/status.md`. |
+| `PRESTO_MCP_CAPTURE_STDOUT_STDERR` | `true` | Capture PRESTO stdout/stderr tails into run logs. |
 
 ### 4. Verify startup
 
@@ -93,7 +91,7 @@ From the repo root:
 uv run --directory . python -m presto_mcp.server
 ```
 
-You should see phase-tagged lines on stderr (`[startup]`, `[docker]`, `[server]`, …) ending with `[server] ready | image=…`, plus a **RUNNING** banner in an interactive terminal. Press Ctrl+C to stop. If startup fails, read the **banner on stderr** (also visible in the MCP Inspector terminal): it lists the error code, a short summary, and numbered remediation steps.
+You should see a **RUNNING** banner in an interactive terminal. Press Ctrl+C to stop. If startup fails, read the **banner on stderr** (also visible in the MCP Inspector terminal): it lists the error code, a short summary, and numbered remediation steps.
 
 **Common startup failure — `DOCKER_DAEMON_DOWN`:** Docker is installed but Docker Desktop is not running. On Windows/macOS the server can try to launch it automatically (`PRESTO_AUTO_START_DOCKER=true` by default; wait up to `PRESTO_AUTO_START_DOCKER_TIMEOUT_SECONDS`). You can also start Docker Desktop manually, confirm `docker info` works, then restart presto-mcp.
 
@@ -149,7 +147,7 @@ For long jobs: set `"background": true` and poll with `presto.get_run_manifest` 
 
 ## MCP tools
 
-The server registers **38** `presto.*` tools. Utility tools (no Docker) are listed first; the rest invoke PRESTO inside the configured image.
+The server registers **45** `presto.*` tools. Utility tools (no Docker) are listed first; the rest invoke PRESTO inside the configured image.
 
 | Tool                         | Purpose                                             |
 | ---------------------------- | --------------------------------------------------- |
@@ -199,6 +197,14 @@ The server registers **38** `presto.*` tools. Utility tools (no Docker) are list
 | `presto.search_bin` *(advanced)* | Phase-modulation / sideband search for binaries |
 | `presto.stacksearch` *(experimental / image-dependent)* | Stack search over many `.fft` |
 | `presto.simple_zapbirds` *(experimental / image-dependent)* | Zap birdies from a `.fft` (on a staged copy) |
+| **Modern reporting** *(post-hoc; reads a workdir)* |                              |
+| `presto.export_candidates_csv` | Normalized `candidates.csv` for a run        |
+| `presto.generate_summary_json` | Structured `summary.json`                    |
+| `presto.generate_visual_artifacts` | Publish PNG visuals + thumbnails         |
+| `presto.generate_candidate_waterfalls` | Per-candidate waterfall PNG/PDF      |
+| `presto.generate_report_html` | Offline HTML dashboard                       |
+| `presto.generate_report_markdown` | Lightweight Markdown report              |
+| `presto.generate_modern_report_bundle` | Full report bundle (intention-routed) |
 
 **Tool status taxonomy.** `stable` · `experimental` (awaiting image
 verification) · `image-dependent` (correctness depends on image contents,
@@ -207,17 +213,17 @@ readiness-gated) · `advanced` (wide parameter space) · `utility` (no Docker).
 ### Tool profiles
 
 `PRESTO_TOOL_PROFILE` (in `.env`) selects which tools the server exposes, so an
-LLM agent chooses from a smaller, task-focused catalog instead of all 38 tools
+LLM agent chooses from a smaller, task-focused catalog instead of all 45 tools
 at once.
 
 | Profile | Tools exposed |
 |---------|---------------|
-| `all` (default) | All 38 tools. |
+| `all` (default) | All 45 tools. |
 | `core` | Core set only (7 tools): `validate_environment`, `list_data_files`, `readfile`, `list_runs`, `get_run_manifest`, `summarize_run`, `inspect_artifacts`. |
 | `rfi_prep` | Core + data-prep + RFI tools. |
 | `periodic` | Core + periodic / acceleration search pipeline. |
 | `single_pulse` | Core + single-pulse search pipeline. |
-| `review_qc` | Core + candidate-review / known-pulsar tools. |
+| `review_qc` | Core + candidate-review / known-pulsar + modern reporting tools. |
 | `advanced` | Core + advanced / experimental tools. |
 
 Every non-`all` profile includes the **core** set above, so
@@ -271,59 +277,47 @@ docker run --rm alex88ridolfi/presto5:png which readfile rfifind prepfold
 
 Startup health checks call `docker info`, not only `docker --version`; the daemon must be running. `presto.validate_environment` reports CLI, daemon, and image checks separately.
 
-### Server logs (console + file)
 
-All logs go to **stderr** (stdout stays JSON-RPC-only). Each line uses a short phase tag:
+### Modern reporting layer (`outputs/`)
 
-| Phase | Meaning |
-|-------|---------|
-| `[startup]` | Health check (data, Docker daemon, image) |
-| `[docker]` | Daemon auto-start, image pull/inspect |
-| `[server]` | Process ready/stop, session paths |
-| `[mcp]` | MCP tool call in/out (`→ presto.readfile`, `← …`) |
-| `[run]` | PRESTO execution in Docker (`start` / `done`) |
-| `[audit]` | Audit session open/close |
-| `[export]` | Consumable files copied to `outputs/` |
-
-### Session log (JSONL)
-
-One append-only file per server process:
-
-- `PRESTO_LOGS_DIR/sessions/<session_id>.jsonl`
-
-When `PRESTO_LOG_TO_FILE=true` (default), stderr lines are mirrored as JSON objects with `"kind": "log"`, `"phase"`, `"level"`, and `"message"`. MCP tool calls add `"tool"` / `"phase"` / `"payload"` lines (`request` / `response` with arguments, duration, `run_id`, and `status`). Filter on `kind` or `tool` for automated review; read `message` for human timelines.
-
-### Consumable exports (`outputs/`)
-
-After each successful PRESTO run, the executor copies astronomer-useful artifacts from `runs/<run_id>/artifacts/` into `PRESTO_OUTPUTS_DIR` (no extra MCP tool call). Full run history stays in `runs/`; `outputs/` is the flat tray for browsing results.
-
-Layout:
+`runs/` holds raw PRESTO outputs (internal workdir). The **modern reporting
+layer** turns a run into clean, astronomer-facing artifacts under
+`outputs/<run_id>/`, on demand, via 7 `presto.*` tools (it never modifies
+PRESTO).
 
 ```
-PRESTO_OUTPUTS_DIR/
-  index.jsonl                 # legacy compact index (kept for compatibility)
-  index/
-    events.v2.jsonl           # enriched event log (type/category/utility/inputs)
-    catalog.v2.json           # grouped snapshot by run/category
-  by_run/
-    <run_id>/
-      candidatos/
-      eventos/
-      timing/
-      rfi/
-      fold/
-      visuales/
-      reportes/
-      intermedios/
+outputs/<run_id>/
+  manifest.json      summary.json      candidates.csv
+  report.html        report.md         status.md / timeline.json
+  visuals/*.png      thumbnails/*.png
+  waterfalls/*.png|*.pdf
+  candidates/<id>/   (candidate.json, waterfall.png, ...)
 ```
 
-Files keep original PRESTO names inside each category folder.  
-Each export appends:
-- one legacy row to `index.jsonl` (`class`, `category`, `artifact_type`, paths);
-- one enriched row to `index/events.v2.jsonl` (`categoria`, `utilidad_astronomo`, `input_refs`, etc.);
-- and updates `index/catalog.v2.json` for run-centric browsing.
+Raw PRESTO intermediates (`.dat`, `.fft`, `.pfd`, `.singlepulse`, `.ps`, …) are
+**not** published by default. Allowed public extensions: `.json .csv .html .md
+.png .pdf`. The preferred tool for a full report is
+`presto.generate_modern_report_bundle`.
 
-Disable with `PRESTO_EXPORT_CONSUMABLES=false` in `.env` (advanced; not in `.env.example`).
+See [docs/modern_reporting_layer.md](./docs/modern_reporting_layer.md) and
+[docs/artifact_policy.md](./docs/artifact_policy.md).
+
+### Observability (`logs/`)
+
+Every server session, MCP request, tool call, PRESTO command, artifact and error
+is recorded as a structured event:
+
+```
+logs/server/server-<session>.{log,jsonl}   logs/server/latest.{log,jsonl}
+logs/runs/<run_id>/  run.jsonl  timeline.json  tool_calls.jsonl
+                     presto_commands.jsonl  artifacts.jsonl  errors.jsonl
+                     status.md  commands/<id>.std{out,err}.txt
+```
+
+Human-readable + machine-readable JSONL run side by side, with log rotation,
+secret redaction and a live `status.md`. Pass an optional `workflow_run_id` to
+any tool to group a pipeline's calls under one `logs/runs/<id>/`. Tune via the
+`PRESTO_MCP_LOG_*` variables above.
 
 ---
 
@@ -417,7 +411,9 @@ anti-bloat rule). Release history — [CHANGELOG.md](./CHANGELOG.md).
 | `CONTRIBUTING.md` | Contribution rules and anti-bloat policy |
 | `docs/` | Architecture, tools, prompts, resources, runtime compatibility |
 | `src/presto_mcp/server.py` | FastMCP entrypoint (stdio) |
-| `src/presto_mcp/server_tools.py` | MCP tool registration (38 tools) |
+| `src/presto_mcp/server_tools.py` | MCP tool registration (45 tools) |
+| `src/presto_mcp/reporting/` | Modern reporting / artifact layer |
+| `src/presto_mcp/observability/` | Structured logging + run tracking |
 | `src/presto_mcp/server_resources.py` | MCP resource registration |
 | `src/presto_mcp/server_prompts.py` | MCP prompt registration (12 prompts) |
 | `src/presto_mcp/tool_metadata.py` | Tool profiles (`PRESTO_TOOL_PROFILE`) |
