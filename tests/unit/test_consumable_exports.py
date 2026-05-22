@@ -45,14 +45,18 @@ def test_export_copies_final_and_pipeline(tmp_path: Path) -> None:
     )
 
     assert len(exported) == 2
-    assert (settings.outputs_dir / "final" / f"{run_id}_waterfaller_waterfall.png").is_file()
-    assert (settings.outputs_dir / "pipeline" / f"{run_id}_waterfaller_rfi.mask").is_file()
+    assert (settings.outputs_dir / "by_run" / run_id / "visuales" / "waterfall.png").is_file()
+    assert (settings.outputs_dir / "by_run" / run_id / "rfi" / "rfi.mask").is_file()
 
     index_lines = (settings.outputs_dir / "index.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(index_lines) == 2
     row = json.loads(index_lines[0])
     assert row["run_id"] == run_id
     assert row["class"] in {"final", "pipeline"}
+    assert row["category"] in {"visuales", "rfi"}
+    assert row["utilidad_astronomo"] in {"alta", "media"}
+    assert (settings.outputs_dir / "index" / "events.v2.jsonl").is_file()
+    assert (settings.outputs_dir / "index" / "catalog.v2.json").is_file()
 
 
 def test_export_skips_when_disabled(tmp_path: Path) -> None:
@@ -108,3 +112,29 @@ def test_export_skips_oversized_file(tmp_path: Path) -> None:
         manifest_uri=f"presto://runs/{run_id}/manifest",
     )
     assert exported == []
+
+
+def test_export_includes_fold_and_postscript(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    run_id = "20260101T120000Z-ABCD12"
+    run_dir = settings.runs_dir / run_id / "artifacts"
+    run_dir.mkdir(parents=True)
+    (run_dir / "cand.pfd").write_bytes(b"PFD")
+    (run_dir / "cand.bestprof").write_bytes(b"BEST")
+    (run_dir / "cand.ps").write_bytes(b"PS")
+    (run_dir / "cand.prof").write_bytes(b"PROF")
+
+    exported = export_run_consumables(
+        settings,
+        run_id=run_id,
+        tool_name="prepfold",
+        run_dir=run_dir.parent,
+        status=RunStatus.SUCCESS,
+        manifest_uri=f"presto://runs/{run_id}/manifest",
+    )
+
+    assert len(exported) == 4
+    assert (settings.outputs_dir / "by_run" / run_id / "fold" / "cand.pfd").is_file()
+    assert (settings.outputs_dir / "by_run" / run_id / "fold" / "cand.bestprof").is_file()
+    assert (settings.outputs_dir / "by_run" / run_id / "visuales" / "cand.ps").is_file()
+    assert (settings.outputs_dir / "by_run" / run_id / "fold" / "cand.prof").is_file()

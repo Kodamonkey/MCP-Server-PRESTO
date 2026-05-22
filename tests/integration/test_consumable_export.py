@@ -58,6 +58,7 @@ def test_waterfaller_exports_png_to_outputs(settings: Settings) -> None:
     )
     assert result.status == RunStatus.SUCCESS
 
-    exported = settings.outputs_dir / "final" / f"{result.run_id}_waterfaller_waterfall.png"
+    exported = settings.outputs_dir / "by_run" / result.run_id / "visuales" / "waterfall.png"
     assert exported.is_file()
     assert (settings.outputs_dir / "index.jsonl").is_file()
+    assert (settings.outputs_dir / "index" / "events.v2.jsonl").is_file()

@@ -63,7 +63,7 @@ If you need deeper control, you can add any of these variables to `.env`:
 | `PRESTO_IMAGE` | `alex88ridolfi/presto5:png` | Use a different PRESTO runtime image/tag. |
 | `PRESTO_DATA_DIR` | `./data` | Your observation files live outside the repo. |
 | `PRESTO_RUNS_DIR` | `./runs` | Save manifests near your data or in another disk. |
-| `PRESTO_OUTPUTS_DIR` | `./outputs` | Astronomer-facing export tray (`final/`, `pipeline/`, `index.jsonl`). |
+| `PRESTO_OUTPUTS_DIR` | `./outputs` | Astronomer-facing export area (`by_run/` + enriched indexes). |
 | `PRESTO_LOGS_DIR` | `./logs` | Redirect server logs to a custom location. |
 | `PRESTO_TOOL_PROFILE` | `all` | Expose only a subset of tools (`core`, `periodic`, etc.). |
 | `PRESTO_AUTO_START_DOCKER` | Windows/macOS: `true`; Linux: `false` | Disable/enable Docker Desktop auto-start behavior. |
@@ -81,7 +81,7 @@ If you need deeper control, you can add any of these variables to `.env`:
 | `PRESTO_LOG_TO_FILE` | `true` | Mirror stderr logs into `sessions/<session_id>.jsonl` (`kind=log` lines). |
 | `PRESTO_PYTHON_BIN` | *(auto)* | `python3` or `python` inside the image; empty = detect at startup. |
 | `PRESTO_EXPORT_CONSUMABLES` | `true` | Copy useful artifacts from each run into `PRESTO_OUTPUTS_DIR`. |
-| `PRESTO_EXPORT_CLASSES` | `final,pipeline` | `final` = plots/reports; `pipeline` = masks, `.singlepulse`, `.spd`, etc. |
+| `PRESTO_EXPORT_CLASSES` | `final,pipeline` | Export role filter: `final` (high-value review artifacts) and/or `pipeline` (intermediate processing artifacts). |
 | `PRESTO_EXPORT_MAX_BYTES` | `500000000` | Skip files larger than this when exporting. |
 | `PRESTO_EXPORT_ON_STATUS` | `SUCCESS` | Export only on successful runs (`ALWAYS` for debug). |
 
@@ -301,12 +301,27 @@ Layout:
 
 ```
 PRESTO_OUTPUTS_DIR/
-  index.jsonl
-  final/      # PNG, PDF, PFD, TOAs — deliverables
-  pipeline/   # masks, singlepulse, spd, dat, fft — next pipeline steps
+  index.jsonl                 # legacy compact index (kept for compatibility)
+  index/
+    events.v2.jsonl           # enriched event log (type/category/utility/inputs)
+    catalog.v2.json           # grouped snapshot by run/category
+  by_run/
+    <run_id>/
+      candidatos/
+      eventos/
+      timing/
+      rfi/
+      fold/
+      visuales/
+      reportes/
+      intermedios/
 ```
 
-Files are named `<run_id>_<tool>_<original_name>`. Each export appends one JSON line to `index.jsonl` with `run_id`, `tool`, `class`, `src`, `dst`, and `manifest_uri`.
+Files keep original PRESTO names inside each category folder.  
+Each export appends:
+- one legacy row to `index.jsonl` (`class`, `category`, `artifact_type`, paths);
+- one enriched row to `index/events.v2.jsonl` (`categoria`, `utilidad_astronomo`, `input_refs`, etc.);
+- and updates `index/catalog.v2.json` for run-centric browsing.
 
 Disable with `PRESTO_EXPORT_CONSUMABLES=false` in `.env` (advanced; not in `.env.example`).
 

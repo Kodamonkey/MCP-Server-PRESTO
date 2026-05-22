@@ -46,6 +46,50 @@ def _resolve_waterfaller_script() -> str:
 PRESTO_WATERFALLER = _resolve_waterfaller_script()
 
 
+def _patch_psrfits_nchnoffs() -> None:
+    """Best-effort hotfix for PRESTO psrfits NCHNOFFS type mismatch."""
+    if os.environ.get("WATERFALLER_DISABLE_PSRFITS_PATCH", "").strip() == "1":
+        return
+
+    candidates: list[Path] = []
+    for pattern in (
+        "/usr/local/lib/python*/dist-packages/presto/psrfits.py",
+        "/usr/lib/python*/dist-packages/presto/psrfits.py",
+    ):
+        candidates.extend(Path(p) for p in glob.glob(pattern))
+    if not candidates:
+        return
+
+    needle = "if subint['NCHNOFFS'] > 0:"
+    replacement = (
+        "try:\n"
+        "                nchnoffs = int(subint['NCHNOFFS'])\n"
+        "            except Exception:\n"
+        "                try:\n"
+        "                    nchnoffs = int(float(str(subint['NCHNOFFS']).strip()))\n"
+        "                except Exception:\n"
+        "                    nchnoffs = 0\n"
+        "            if nchnoffs > 0:"
+    )
+
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "nchnoffs = int(subint['NCHNOFFS'])" in text:
+            return  # already patched
+        if needle not in text:
+            continue
+        try:
+            path.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
+        except OSError as exc:
+            print(f"[waterfaller_headless] psrfits hotfix write failed: {exc}", file=sys.stderr)
+            return
+        print(f"[waterfaller_headless] applied psrfits NCHNOFFS hotfix: {path}")
+        return
+
+
 def _maybe_convert_psrfits_input(argv: list[str]) -> list[str]:
     """Convert PSRFITS input to .fil to bypass known psrfits reader issues."""
     if not argv:
@@ -103,6 +147,7 @@ def _headless_show(*_args: object, **_kwargs: object) -> None:
 plt.show = _headless_show  # type: ignore[method-assign]
 
 if __name__ == "__main__":
+    _patch_psrfits_nchnoffs()
     tool_argv = _maybe_convert_psrfits_input(sys.argv[1:])
     sys.argv = [PRESTO_WATERFALLER, *tool_argv]
     runpy.run_path(PRESTO_WATERFALLER, run_name="__main__")

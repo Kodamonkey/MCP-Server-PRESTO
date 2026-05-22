@@ -425,5 +425,13 @@ deterministic.
 
 PRESTO tools do not copy files to `PRESTO_OUTPUTS_DIR` themselves. After each
 run completes, the executor exports selected artifacts from
-`runs/<run_id>/artifacts/` into `outputs/final/` or `outputs/pipeline/` and
-appends a row to `outputs/index.jsonl`. See README “Consumable exports”.
+`runs/<run_id>/artifacts/` into:
+
+- `outputs/by_run/<run_id>/<categoria>/...` (astronomy-oriented categories),
+- `outputs/index/events.v2.jsonl` (enriched stream),
+- `outputs/index/catalog.v2.json` (grouped snapshot),
+- plus `outputs/index.jsonl` legacy compatibility rows.
+
+`PRESTO_EXPORT_CLASSES` still gates export by role (`final`/`pipeline`), but
+folder layout is now category-first (`candidatos`, `eventos`, `timing`, `rfi`,
+`fold`, `visuales`, `reportes`, `intermedios`).

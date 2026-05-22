@@ -185,7 +185,20 @@ runs/
         └── <prefix>.pfd.bestprof
 ```
 
-`outputs/` is reserved for human-facing exports (future phase); MVP never writes there from MCP tools.
+`outputs/` is used by post-run consumable export (outside PRESTO binaries). The
+executor mirrors selected artifacts into:
+
+```
+outputs/
+  index.jsonl                    # legacy compact rows
+  index/events.v2.jsonl          # enriched rows (type/category/utility/inputs)
+  index/catalog.v2.json          # grouped snapshot by run
+  by_run/<run_id>/<categoria>/   # astronomy-facing folders
+```
+
+`PRESTO_EXPORT_CLASSES` (`final`,`pipeline`) remains a role filter; destination
+folders are category-oriented (`candidatos`, `eventos`, `timing`, `rfi`, `fold`,
+`visuales`, `reportes`, `intermedios`).
 
 `list_runs` is `glob("runs/*/manifest.json") → load_manifest`. Stale `RUNNING`
 manifests older than their timeout are reported as failed views without
