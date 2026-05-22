@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +19,7 @@ _STATE: dict[Path, tuple[str, Path]] = {}
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now().astimezone().isoformat()
 
 
 def _write_line(path: Path, entry: dict[str, Any]) -> None:
@@ -31,7 +31,8 @@ def _write_line(path: Path, entry: dict[str, Any]) -> None:
 def new_session_id() -> str:
     global _SESSION_COUNTER
     _SESSION_COUNTER += 1
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    # Local wall-clock timestamp to match operator session time in filenames.
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     return f"{stamp}-{_SESSION_COUNTER:04d}"
 
 
@@ -51,18 +52,18 @@ def active_session(logs_dir: Path) -> tuple[str, Path] | None:
     return _STATE.get(logs_dir)
 
 
-def append_entry(logs_dir: Path, entry: dict[str, Any]) -> None:
-    """Append one JSON object as a line; fills ``ts``, ``session_id``, ``session_file``."""
+def append_entry(logs_dir: Path, entry: dict[str, Any]) -> bool:
+    """Append one JSON object to active session file.
+
+    Fills ``ts``, ``session_id``, ``session_file``.
+    Returns ``False`` when no active session exists for ``logs_dir``.
+    """
     logs_dir.mkdir(parents=True, exist_ok=True)
     with _LOCK:
         state = _STATE.get(logs_dir)
         if state is None:
-            session_id = new_session_id()
-            path = logs_dir / _SESSION_DIRNAME / f"{session_id}.jsonl"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            _STATE[logs_dir] = (session_id, path)
-        else:
-            session_id, path = state
+            return False
+        session_id, path = state
         full = {
             "ts": _now_iso(),
             "session_id": session_id,
@@ -70,6 +71,7 @@ def append_entry(logs_dir: Path, entry: dict[str, Any]) -> None:
             **entry,
         }
         _write_line(path, full)
+        return True
 
 
 def close_session(logs_dir: Path) -> tuple[str, Path] | None:

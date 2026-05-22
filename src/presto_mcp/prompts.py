@@ -25,6 +25,27 @@ READINESS_NOTE = (
     "a missing runtime dependency."
 )
 
+PSRFITS_WATERFALL_GUARDRAIL = (
+    "PSRFITS guardrail for waterfaller: if input is PSRFITS "
+    "(`.fits`/`.psrfits`/`.sf`), first run `presto.psrfits2fil` and prefer "
+    "`presto.waterfaller` on produced `.fil`. Some PRESTO images have known "
+    "PSRFITS reader incompatibilities (for example `NCHNOFFS` type mismatch) "
+    "that can fail `waterfaller` or `ddplan` on FITS input. If conversion "
+    "fails, mark waterfall as known limitation and continue pipeline."
+)
+
+FINAL_REPORT_CONTRACT = (
+    "Final report contract (MANDATORY at pipeline end):\n"
+    "STATE: RUNNING | DONE | DONE_WITH_LIMITATIONS | FAILED\n"
+    "RUN_IDS: [<run_id>, ...]\n"
+    "TOOLS_OK: [<tool>, ...]\n"
+    "TOOLS_FAILED: [{tool, reason, fallback_used}]\n"
+    "CANDIDATES: [{id, period_ms, dm, significance, verdict}]\n"
+    "ARTIFACTS: [{kind, run_id, path_or_uri}]\n"
+    "FINAL_CONCLUSION: <short technical conclusion>\n"
+    "Do not omit this section, even when no candidates are found."
+)
+
 TAXONOMY = (
     "Evidence taxonomy — never blur these levels:\n"
     "  - artifact: a file on disk. No scientific claim.\n"
@@ -100,7 +121,9 @@ def build_single_pulse_search_plan(
         f"- Each step writes its own run with manifest + stdout + stderr URIs;\n"
         f"  chain by passing `<run_id>/artifacts/<file>` to the next tool.\n\n"
         f"{READINESS_NOTE}\n\n"
+        f"{PSRFITS_WATERFALL_GUARDRAIL}\n\n"
         f"{TAXONOMY}\n\n"
+        f"{FINAL_REPORT_CONTRACT}\n\n"
         f"{DISCLAIMER}\n"
     )
 
@@ -142,7 +165,9 @@ def build_periodic_search_plan(
         f"  survivors and a clean folded profile.\n"
         f"- Cite artifact URIs (`presto://runs/<id>/artifacts/...`) when reporting.\n\n"
         f"{READINESS_NOTE}\n\n"
+        f"{PSRFITS_WATERFALL_GUARDRAIL}\n\n"
         f"{TAXONOMY}\n\n"
+        f"{FINAL_REPORT_CONTRACT}\n\n"
         f"{DISCLAIMER}\n"
     )
 
@@ -216,6 +241,8 @@ def build_generate_candidate_report_plan(run_id: str | None = None) -> str:
         f"   - candidate (passes sifting / SNR threshold)\n"
         f"   - detection (multi-DM, multi-pass, clean folded profile)\n"
         f"5. Do NOT assert a scientific confirmation; report what the artifacts show.\n\n"
+        f"{PSRFITS_WATERFALL_GUARDRAIL}\n\n"
+        f"{FINAL_REPORT_CONTRACT}\n\n"
         f"{DISCLAIMER}\n"
     )
 
@@ -353,6 +380,8 @@ def build_single_pulse_full_plan(
         f"Debugging:\n"
         f"- If the input is too large for fast iteration, call\n"
         f"  `presto.fb_truncate` first and run the pipeline on the subset.\n\n"
+        f"{PSRFITS_WATERFALL_GUARDRAIL}\n\n"
+        f"{FINAL_REPORT_CONTRACT}\n\n"
         f"{DISCLAIMER}\n"
     )
 
@@ -406,6 +435,8 @@ def build_tool_selection_guide(task: str) -> str:
         f"  `presto.explain_failed_run` (prompt).\n"
         f"- **Advanced binary search**: `presto.search_bin` (advanced).\n\n"
         f"{READINESS_NOTE}\n\n"
+        f"{PSRFITS_WATERFALL_GUARDRAIL}\n\n"
+        f"{FINAL_REPORT_CONTRACT}\n\n"
         f"Use `presto.list_runs` / `presto.get_run_manifest` to chain artifacts\n"
         f"across runs.\n\n"
         f"{DISCLAIMER}\n"
@@ -443,12 +474,16 @@ def build_candidate_review_plan(run_id: str | None = None) -> str:
         f"This plan does not confirm detections. A confirmed detection always\n"
         f"requires human review or independent external evidence.\n\n"
         f"{READINESS_NOTE}\n\n"
+        f"{PSRFITS_WATERFALL_GUARDRAIL}\n\n"
+        f"{FINAL_REPORT_CONTRACT}\n\n"
         f"{DISCLAIMER}\n"
     )
 
 
 __all__ = [
     "DISCLAIMER",
+    "FINAL_REPORT_CONTRACT",
+    "PSRFITS_WATERFALL_GUARDRAIL",
     "READINESS_NOTE",
     "TAXONOMY",
     "build_candidate_review_plan",

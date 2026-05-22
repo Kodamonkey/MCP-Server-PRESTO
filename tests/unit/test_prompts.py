@@ -187,12 +187,21 @@ def test_search_plans_carry_guardrails() -> None:
         assert "presto.validate_environment" in text
         assert "taxonomy" in text.lower()
         assert "detection" in text.lower()
+        assert "psrfits2fil" in text.lower()
+        assert "final report contract" in text.lower()
     # periodic plan must flag the image-dependent wmax flag
     assert "wmax" in pp
     # single-pulse plan must gate rrattrap on readiness
     assert "presto.singlepulse" in sp
     # candidate review must refuse unilateral scientific confirmation
     assert "human" in cr.lower()
+
+
+def test_final_report_contract_shared_constant_present() -> None:
+    contract = prompts.FINAL_REPORT_CONTRACT
+    assert "STATE:" in contract
+    assert "TOOLS_FAILED:" in contract
+    assert "FINAL_CONCLUSION:" in contract
 
 
 def test_builders_are_pure_functions() -> None:

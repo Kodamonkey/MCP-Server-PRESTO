@@ -7,9 +7,11 @@ Must be invoked inside the PRESTO Docker image (paths below are image-local).
 
 from __future__ import annotations
 
+import glob
 import os
 import runpy
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -21,6 +23,7 @@ matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 
 OUTPUT = os.environ.get("WATERFALL_OUTPUT", "waterfall.png")
+_PSRFITS_EXTS = (".fits", ".sf", ".psrfits")
 
 
 def _resolve_waterfaller_script() -> str:
@@ -43,6 +46,53 @@ def _resolve_waterfaller_script() -> str:
 PRESTO_WATERFALLER = _resolve_waterfaller_script()
 
 
+def _maybe_convert_psrfits_input(argv: list[str]) -> list[str]:
+    """Convert PSRFITS input to .fil to bypass known psrfits reader issues."""
+    if not argv:
+        return argv
+    if os.environ.get("WATERFALLER_DISABLE_PSRFITS2FIL", "").strip() == "1":
+        return argv
+
+    input_path = argv[-1]
+    if not input_path.lower().endswith(_PSRFITS_EXTS):
+        return argv
+
+    prefix = "/outputs/artifacts/waterfaller_input"
+    cmd = ["psrfits2fil.py", "-o", prefix, input_path]
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except Exception as exc:  # pragma: no cover - defensive runtime fallback
+        print(f"[waterfaller_headless] psrfits2fil launch failed: {exc}", file=sys.stderr)
+        return argv
+
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()
+        detail = tail[-1] if tail else "unknown error"
+        print(
+            f"[waterfaller_headless] psrfits2fil failed ({proc.returncode}): {detail}",
+            file=sys.stderr,
+        )
+        return argv
+
+    fil_hits = sorted(glob.glob(f"{prefix}*.fil"))
+    if not fil_hits:
+        print("[waterfaller_headless] psrfits2fil produced no .fil output", file=sys.stderr)
+        return argv
+
+    chosen = fil_hits[0]
+    print(f"[waterfaller_headless] using converted filterbank: {chosen}")
+    out = argv.copy()
+    out[-1] = chosen
+    return out
+
+
 def _headless_show(*_args: object, **_kwargs: object) -> None:
     fig = plt.gcf()
     if fig.axes:
@@ -53,5 +103,6 @@ def _headless_show(*_args: object, **_kwargs: object) -> None:
 plt.show = _headless_show  # type: ignore[method-assign]
 
 if __name__ == "__main__":
-    sys.argv = [PRESTO_WATERFALLER, *sys.argv[1:]]
+    tool_argv = _maybe_convert_psrfits_input(sys.argv[1:])
+    sys.argv = [PRESTO_WATERFALLER, *tool_argv]
     runpy.run_path(PRESTO_WATERFALLER, run_name="__main__")
