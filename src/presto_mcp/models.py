@@ -256,6 +256,19 @@ class PlotSpdResult(BaseModel):
     png_file: str | None = None
 
 
+class WaterfallerCompatNotes(BaseModel):
+    """Audit trail for non-default behavior applied by waterfaller_headless.
+
+    All flags default to ``False`` / ``None`` so a manifest with no compat
+    fallbacks records the same value as a missing sidecar file.
+    """
+
+    compat_mode: bool = False
+    psrfits_hotfix_applied: bool = False
+    psrfits2fil_converted: bool = False
+    converted_input_path: str | None = None
+
+
 class WaterfallerResult(BaseModel):
     input_raw: str
     start_s: float
@@ -263,6 +276,7 @@ class WaterfallerResult(BaseModel):
     dm: float
     mask_file: str | None = None
     output_file: str | None = None
+    compat_notes: WaterfallerCompatNotes | None = None
 
 
 class GetTOAsResult(BaseModel):

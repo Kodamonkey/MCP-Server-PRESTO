@@ -1899,10 +1899,24 @@ def register_tools(
             float | None,
             Field(default=None, gt=0.0, le=600.0, description="Waterfall window length (s)."),
         ] = None,
+        colour_map: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Matplotlib colormap name (canonical, matches PRESTO "
+                    "--colour-map). Defaults to 'inferno' when both this and the "
+                    "deprecated 'color_map' alias are unset."
+                ),
+            ),
+        ] = None,
         color_map: Annotated[
-            str,
-            Field(default="inferno", description="Matplotlib colormap name."),
-        ] = "inferno",
+            str | None,
+            Field(
+                default=None,
+                description="Deprecated alias for colour_map (kept for back-compat).",
+            ),
+        ] = None,
         export_png: Annotated[
             bool,
             Field(default=True, description="Publish per-candidate PNG waterfalls."),
@@ -1926,6 +1940,7 @@ def register_tools(
             min_dm=min_dm,
             max_dm=max_dm,
             time_window_sec=time_window_sec,
+            colour_map=colour_map,
             color_map=color_map,
             export_png=export_png,
             export_pdf=export_pdf,

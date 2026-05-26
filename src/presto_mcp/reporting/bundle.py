@@ -95,9 +95,60 @@ def resolve_roots(
     return roots
 
 
+def _find_preferred_waterfall_mask(
+    roots: list[Path],
+    settings: Settings,
+) -> str | None:
+    """Return best available mask ref as ``<run_id>/artifacts/<name>.mask``."""
+    runs_root = settings.runs_dir.resolve()
+    ranked: list[tuple[int, float, str]] = []
+
+    def _as_ref(mask_path: Path) -> str | None:
+        try:
+            rel = mask_path.resolve().relative_to(runs_root)
+        except ValueError:
+            return None
+        return rel.as_posix()
+
+    for root in roots:
+        root = Path(root)
+        if not root.is_dir():
+            continue
+
+        # Highest-priority source: successful rfifind run's artifacts/*.mask.
+        manifest_path = root / "manifest.json"
+        if manifest_path.is_file():
+            try:
+                mdata = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                mdata = {}
+            if (
+                isinstance(mdata, dict)
+                and str(mdata.get("tool", "")) == "rfifind"
+                and str(mdata.get("status", "")).upper() == "SUCCESS"
+            ):
+                for mask in sorted((root / "artifacts").glob("*.mask")):
+                    ref = _as_ref(mask)
+                    if ref is not None:
+                        ranked.append((2, mask.stat().st_mtime, ref))
+
+        # Fallback source: any mask below selected roots.
+        for mask in sorted(root.rglob("*.mask")):
+            ref = _as_ref(mask)
+            if ref is not None:
+                ranked.append((1, mask.stat().st_mtime, ref))
+
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return ranked[0][2]
+
+
 def make_waterfall_fn(
     backend: BackendProtocol,
     settings: Settings,
+    *,
+    mask_file: str | None = None,
 ) -> WaterfallFn:
     """Build a waterfall renderer backed by the containerized PRESTO waterfaller."""
     from ..tools.waterfaller import run_waterfaller
@@ -117,7 +168,7 @@ def make_waterfall_fn(
             start_s=start_s,
             duration_s=duration_s,
             dm=dm,
-            mask_file=None,
+            mask_file=mask_file,
             colour_map=cmap,
             nsub=None,
             nbins=None,
@@ -215,6 +266,7 @@ def generate_bundle(
     # 3. per-candidate waterfalls
     if policy.export_waterfall_png or policy.export_waterfall_pdf:
         _run_waterfalls(
+            roots,
             candidates,
             am,
             policy=policy,
@@ -360,6 +412,7 @@ def generate_bundle(
 
 
 def _run_waterfalls(
+    roots: list[Path],
     candidates: list[Candidate],
     am: ArtifactManager,
     *,
@@ -383,7 +436,10 @@ def _run_waterfalls(
     if backend is None:
         am.add_warning("waterfalls requested but no Docker backend available; skipped")
         return
-    waterfall_fn = make_waterfall_fn(backend, settings)
+    mask_ref = _find_preferred_waterfall_mask(roots, settings)
+    if mask_ref:
+        log.info("waterfaller using rfifind mask: %s", mask_ref)
+    waterfall_fn = make_waterfall_fn(backend, settings, mask_file=mask_ref)
     generate_waterfalls(
         candidates,
         am,

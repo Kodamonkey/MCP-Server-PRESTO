@@ -105,21 +105,32 @@ def run_generate_candidate_waterfalls(
     min_dm: float | None = None,
     max_dm: float | None = None,
     time_window_sec: float | None = None,
-    color_map: str = "inferno",
+    colour_map: str | None = None,
+    color_map: str | None = None,  # deprecated alias for colour_map
     export_png: bool = True,
     export_pdf: bool = False,
 ) -> ReportToolResult:
-    """Render per-candidate waterfall diagnostics (PNG, optional PDF)."""
+    """Render per-candidate waterfall diagnostics (PNG, optional PDF).
+
+    ``colour_map`` is canonical (matches PRESTO upstream ``--colour-map``).
+    ``color_map`` is accepted as a deprecated alias.
+    """
+    cmap = colour_map if colour_map is not None else color_map
+    if cmap is None:
+        cmap = "inferno"
     policy = ArtifactPolicy(
         **{
             **_ALL_OFF,
+            "export_summary_json": True,
+            "export_candidates_csv": True,
             "export_waterfall_png": export_png,
             "export_waterfall_pdf": export_pdf,
+            "export_report_html": True,
         },
-        default_waterfall_cmap=color_map,
+        default_waterfall_cmap=cmap,
     )
     options = ReportOptions(
-        waterfall_cmap=color_map,
+        waterfall_cmap=cmap,
         waterfall_window_sec=time_window_sec or 1.0,
     )
     return generate_bundle(
@@ -225,11 +236,15 @@ def run_generate_modern_report_bundle(
 
     With no intention flag set, defaults to the full report bundle.
     """
+    # Users asking for the "full report" expect waterfalls in HTML.
+    auto_waterfalls_for_report = bool(
+        wants_report and input_file is not None and backend is not None
+    )
     flags = IntentionFlags(
         wants_metadata_only=wants_metadata_only,
         wants_candidates=wants_candidates,
         wants_visuals=wants_visuals,
-        wants_waterfalls=wants_waterfalls,
+        wants_waterfalls=(wants_waterfalls or auto_waterfalls_for_report),
         wants_waterfall_pdf=wants_waterfall_pdf,
         wants_report=wants_report,
         wants_no_extra_files=wants_no_extra_files,
@@ -240,6 +255,24 @@ def run_generate_modern_report_bundle(
         flags.wants_report = True
     policy = route_intention(flags)
     policy.default_waterfall_cmap = waterfall_cmap
+    selection_effective = waterfall_selection
+    top_n_effective = waterfall_top_n
+
+    # Full report mode should be global by default: all parsed events and all
+    # renderable waterfalls (including low-DM/RFI-like events), unless caller
+    # explicitly overrides selection.
+    if flags.wants_report:
+        policy.max_candidates_in_html = 1_000_000
+        if (
+            selection_effective == "top_n"
+            and top_n_effective == 10
+            and input_file is not None
+            and backend is not None
+        ):
+            selection_effective = "all"
+        if selection_effective == "all":
+            policy.max_candidates_for_waterfalls = 1_000_000
+
     return generate_bundle(
         tool_name="generate_modern_report_bundle",
         run_ids=run_ids,
@@ -253,8 +286,8 @@ def run_generate_modern_report_bundle(
         ),
         settings=settings,
         backend=backend,
-        waterfall_selection=waterfall_selection,
-        waterfall_top_n=waterfall_top_n,
+        waterfall_selection=selection_effective,
+        waterfall_top_n=top_n_effective,
     )
 
 

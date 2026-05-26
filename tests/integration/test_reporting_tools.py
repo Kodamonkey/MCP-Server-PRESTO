@@ -11,12 +11,14 @@ from PIL import Image
 from presto_mcp.config import get_settings
 from presto_mcp.tools.reporting import (
     run_export_candidates_csv,
+    run_generate_candidate_waterfalls,
     run_generate_modern_report_bundle,
     run_generate_report_html,
     run_generate_report_markdown,
     run_generate_summary_json,
     run_generate_visual_artifacts,
 )
+from tests.fakes.fake_docker_backend import FakeDockerBackend, FakeResponse
 
 _RID = "20260101T000000Z-ABC234"
 _SP = "# DM Sigma Time Sample Downfact\n42.0 9.1 12.3 100000 2\n0.3 6.0 3.2 9000 1\n"
@@ -28,6 +30,7 @@ def synthetic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runs, outs, data = tmp_path / "runs", tmp_path / "outputs", tmp_path / "data"
     for d in (runs, outs, data):
         d.mkdir()
+    (data / "obs.fil").write_bytes(b"FIL" * 64)
     art = runs / _RID / "artifacts"
     art.mkdir(parents=True)
     (art / "obs.singlepulse").write_text(_SP, encoding="utf-8")
@@ -136,6 +139,117 @@ def test_visual_artifacts_tool(synthetic) -> None:
     out = Path(result.output_dir)
     assert (out / "visuals" / "plot.png").is_file()
     assert (out / "thumbnails" / "plot.png").is_file()
+
+
+def test_generate_candidate_waterfalls_writes_html_bundle(synthetic) -> None:
+    (synthetic.runs_dir / _RID / "artifacts" / "obs_rfifind.mask").write_bytes(b"MASK")
+    backend = FakeDockerBackend(
+        responses={
+            "python3": FakeResponse(
+                stdout="rendered\n",
+                artifacts={"waterfall.png": b"\x89PNG\r\n\x1a\n"},
+            )
+        }
+    )
+    result = run_generate_candidate_waterfalls(
+        run_ids=[_RID],
+        input_file="obs.fil",
+        settings=synthetic,
+        backend=backend,
+        top_n=1,
+        colour_map="plasma",
+        export_png=True,
+        export_pdf=False,
+    )
+    out = Path(result.output_dir)
+    assert (out / "report.html").is_file()
+    assert (out / "summary.json").is_file()
+    assert (out / "candidates.csv").is_file()
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert "waterfalls/sp-0001.png" in html
+    assert "candidates/sp-0001/waterfall.png" in html
+    assert any("--maskfile" in call.invocation.argv for call in backend.calls)
+    assert any(
+        "plasma" in call.invocation.argv and "--colour-map" in call.invocation.argv
+        for call in backend.calls
+    )
+
+
+def test_generate_candidate_waterfalls_accepts_color_map_alias(synthetic) -> None:
+    """Deprecated American-spelling alias still works."""
+    (synthetic.runs_dir / _RID / "artifacts" / "obs_rfifind.mask").write_bytes(b"MASK")
+    backend = FakeDockerBackend(
+        responses={
+            "python3": FakeResponse(
+                stdout="rendered\n",
+                artifacts={"waterfall.png": b"\x89PNG\r\n\x1a\n"},
+            )
+        }
+    )
+    result = run_generate_candidate_waterfalls(
+        run_ids=[_RID],
+        input_file="obs.fil",
+        settings=synthetic,
+        backend=backend,
+        top_n=1,
+        color_map="viridis",
+        export_png=True,
+    )
+    assert Path(result.output_dir, "report.html").is_file()
+    assert any(
+        "viridis" in call.invocation.argv and "--colour-map" in call.invocation.argv
+        for call in backend.calls
+    )
+
+
+def test_full_report_auto_enables_waterfalls_when_possible(synthetic) -> None:
+    backend = FakeDockerBackend(
+        responses={
+            "python3": FakeResponse(
+                stdout="rendered\n",
+                artifacts={"waterfall.png": b"\x89PNG\r\n\x1a\n"},
+            )
+        }
+    )
+    result = run_generate_modern_report_bundle(
+        run_ids=[_RID],
+        settings=synthetic,
+        input_file="obs.fil",
+        backend=backend,
+        wants_report=True,
+    )
+    out = Path(result.output_dir)
+    assert (out / "report.html").is_file()
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["waterfall_png"]
+
+
+def test_full_report_is_global_and_not_limited_to_top10(synthetic) -> None:
+    rows = ["# DM Sigma Time Sample Downfact"]
+    rows.extend(f"{20.0 + i:.1f} 9.0 {3.0 + i:.2f} {10000 + i} 1" for i in range(12))
+    (synthetic.runs_dir / _RID / "artifacts" / "obs.singlepulse").write_text(
+        "\n".join(rows) + "\n",
+        encoding="utf-8",
+    )
+
+    backend = FakeDockerBackend(
+        responses={
+            "python3": FakeResponse(
+                stdout="rendered\n",
+                artifacts={"waterfall.png": b"\x89PNG\r\n\x1a\n"},
+            )
+        }
+    )
+    result = run_generate_modern_report_bundle(
+        run_ids=[_RID],
+        settings=synthetic,
+        input_file="obs.fil",
+        backend=backend,
+        wants_report=True,
+    )
+    manifest = json.loads((Path(result.output_dir) / "manifest.json").read_text(encoding="utf-8"))
+    rendered_ids = {entry.get("candidate_id") for entry in manifest["waterfall_png"]}
+    assert len(rendered_ids) == 12
 
 
 def test_raw_presto_outputs_not_published_by_default(synthetic) -> None:

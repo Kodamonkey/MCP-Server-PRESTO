@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "presto": {
+      "command": "C:\\Users\\sebas\\.local\\bin\\uv.exe",
+      "args": [
+        "run",
+        "--directory",
+        "C:\\Users\\sebas\\OneDrive\\Escritorio\\Work\\MCP-Server-Presto",
+        "python",
+        "-m",
+        "presto_mcp.server"
+      ]
+    }
+  }
+}

@@ -20,6 +20,7 @@ from ..docker_backend import BackendProtocol
 from ..executor import ExtraInput, RunSpec, execute, extra_input_for
 from ..models import ToolRunResult, WaterfallerResult
 from ..parsers import waterfaller_parser
+from ..path_security import is_run_artifact_path
 from ..policies import check_dm, check_waterfall_duration, check_waterfall_start
 
 log = logging.getLogger("presto_mcp.tools.waterfaller")
@@ -50,9 +51,11 @@ def run_waterfaller(
 ) -> ToolRunResult[WaterfallerResult]:
     """``waterfaller.py -T <t0> -t <dur> -d <dm> [--mask --maskfile <m>] <raw>``.
 
-    ``input_file`` is relative to ``DATA_DIR``. Optional ``mask_file`` can be
-    either relative to ``DATA_DIR`` or a ``<run_id>/artifacts/<file>.mask``
-    produced by a prior ``rfifind`` run; the root is detected from the path.
+    ``input_file`` may be either relative to ``DATA_DIR`` or
+    ``<run_id>/artifacts/<file>`` from a prior run (e.g. a ``.fil`` produced by
+    ``psrfits2fil``, ``fb_truncate``, or ``downsample_filterbank``); the root is
+    auto-detected from the path shape. Optional ``mask_file`` follows the same
+    auto-detection.
     """
     s = settings or get_settings()
     t0 = check_waterfall_start(start_s)
@@ -116,6 +119,7 @@ def run_waterfaller(
     if downsamp is not None:
         inputs_extra["downsamp"] = str(int(downsamp))
 
+    input_root = "runs" if is_run_artifact_path(input_file) else "data"
     spec = RunSpec[WaterfallerResult](
         tool_name="waterfaller",
         input_file=input_file,
@@ -126,6 +130,7 @@ def run_waterfaller(
         timeout_s=s.default_timeout_s,
         cpus=s.default_cpus,
         memory_mb=s.default_memory_mb,
+        input_root=input_root,
         extra_inputs=extras,
         container_workdir="/outputs/artifacts",
         pre_invocation_hook=_stage_headless_wrapper,

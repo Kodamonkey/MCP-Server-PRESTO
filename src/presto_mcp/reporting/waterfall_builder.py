@@ -28,6 +28,12 @@ WaterfallFn = Callable[..., Path | None]
 CandidateSelection = str  # "one" | "top_n" | "all"
 
 
+_RETRYABLE_WATERFALL_ERROR_SNIPPETS = (
+    "slice indices must be integers",
+    "get_spectra",
+)
+
+
 def generate_waterfalls(
     candidates: list[Candidate],
     am: ArtifactManager,
@@ -71,33 +77,26 @@ def generate_waterfalls(
         eligible = eligible[:cap]
 
     artifacts: list[Artifact] = []
-    backend_failed_once = False
     for cand in eligible:
-        if backend_failed_once:
-            am.add_warning(
-                f"candidate {cand.candidate_id}: skipped after prior backend failure"
-            )
-            continue
         if cand.dm is None or cand.time_sec is None:
             am.add_warning(
                 f"candidate {cand.candidate_id}: missing dm/time, cannot render waterfall"
             )
             continue
-        start = max(0.0, cand.time_sec - window / 2.0)
         try:
-            png = waterfall_fn(
+            png = _render_candidate_waterfall_with_retry(
+                waterfall_fn=waterfall_fn,
                 input_file=input_file,
-                start_s=start,
-                duration_s=window,
                 dm=cand.dm,
                 cmap=cmap,
                 candidate_id=cand.candidate_id,
+                candidate_time_sec=cand.time_sec,
+                base_window_sec=window,
+                am=am,
             )
         except Exception as e:  # noqa: BLE001 - one candidate must not abort the run
             am.add_warning(f"candidate {cand.candidate_id}: waterfall render failed: {e}")
             log.warning("waterfall render failed for %s", cand.candidate_id, exc_info=True)
-            if "waterfaller backend failed" in str(e):
-                backend_failed_once = True
             continue
         if png is None or not Path(png).is_file():
             am.add_warning(
@@ -115,6 +114,62 @@ def generate_waterfalls(
             )
         )
     return artifacts
+
+
+def _render_candidate_waterfall_with_retry(
+    *,
+    waterfall_fn: WaterfallFn,
+    input_file: str,
+    dm: float,
+    cmap: str,
+    candidate_id: str,
+    candidate_time_sec: float,
+    base_window_sec: float,
+    am: ArtifactManager,
+) -> Path | None:
+    """Render one candidate waterfall, retrying with smaller windows on edge errors."""
+    windows = _retry_windows(base_window_sec)
+    last_error: Exception | None = None
+    for idx, window_sec in enumerate(windows):
+        start = max(0.0, candidate_time_sec - window_sec / 2.0)
+        try:
+            png = waterfall_fn(
+                input_file=input_file,
+                start_s=start,
+                duration_s=window_sec,
+                dm=dm,
+                cmap=cmap,
+                candidate_id=candidate_id,
+            )
+            if idx > 0:
+                am.add_warning(
+                    f"candidate {candidate_id}: waterfall retry succeeded with shorter window "
+                    f"{window_sec:.3f}s"
+                )
+            return png
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            if idx == len(windows) - 1 or not _is_retryable_waterfall_error(e):
+                raise
+            continue
+    if last_error is not None:
+        raise last_error
+    return None
+
+
+def _retry_windows(base_window_sec: float) -> list[float]:
+    base = max(0.05, float(base_window_sec))
+    windows: list[float] = [base]
+    for candidate in (base * 0.75, base * 0.5, 0.25):
+        w = max(0.05, candidate)
+        if all(abs(w - seen) > 1e-6 for seen in windows):
+            windows.append(w)
+    return windows
+
+
+def _is_retryable_waterfall_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    return any(snippet in msg for snippet in _RETRYABLE_WATERFALL_ERROR_SNIPPETS)
 
 
 def _publish_candidate_waterfall(

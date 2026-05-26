@@ -144,17 +144,37 @@ def _fake_waterfall_factory(tmp_path: Path, seen: list[str]):
     return _fake
 
 
-def _failing_waterfall_factory(fail_after: int = 1):
-    calls = {"count": 0}
+def _one_failure_then_success_factory(tmp_path: Path):
+    calls: list[str] = []
 
     def _fake(*, input_file, start_s, duration_s, dm, cmap, candidate_id):  # noqa: ANN001
-        _ = (input_file, start_s, duration_s, dm, cmap, candidate_id)
-        calls["count"] += 1
-        if calls["count"] >= fail_after:
+        _ = (input_file, start_s, duration_s, dm, cmap, duration_s)
+        calls.append(candidate_id)
+        if candidate_id == "sp-0000":
             raise RuntimeError("waterfaller backend failed (run_id=RID): boom")
-        return None
+        out = tmp_path / f"{candidate_id}_wf.png"
+        Image.new("RGB", (12, 12), "black").save(out)
+        return out
 
-    return _fake
+    return _fake, calls
+
+
+def _retryable_failure_factory(tmp_path: Path):
+    calls: list[float] = []
+
+    def _fake(*, input_file, start_s, duration_s, dm, cmap, candidate_id):  # noqa: ANN001
+        _ = (input_file, start_s, dm, cmap, candidate_id)
+        calls.append(duration_s)
+        if len(calls) == 1:
+            raise RuntimeError(
+                "waterfaller backend failed (run_id=RID): TypeError: "
+                "slice indices must be integers or None or have an __index__ method"
+            )
+        out = tmp_path / "retry_wf.png"
+        Image.new("RGB", (12, 12), "black").save(out)
+        return out
+
+    return _fake, calls
 
 
 def test_waterfall_png_only_default_cmap(tmp_path: Path) -> None:
@@ -215,7 +235,8 @@ def test_waterfall_respects_max_cap(tmp_path: Path) -> None:
     assert any("max_candidates_for_waterfalls" in w for w in am.warnings)
 
 
-def test_waterfall_stops_after_backend_failure(tmp_path: Path) -> None:
+def test_waterfall_continues_after_backend_failure(tmp_path: Path) -> None:
+    wf, calls = _one_failure_then_success_factory(tmp_path)
     am = ArtifactManager(tmp_path / "outputs", _RID)
     am.create_run()
     generate_waterfalls(
@@ -223,14 +244,35 @@ def test_waterfall_stops_after_backend_failure(tmp_path: Path) -> None:
         am,
         policy=ArtifactPolicy(),
         options=ReportOptions(),
-        waterfall_fn=_failing_waterfall_factory(),
+        waterfall_fn=wf,
         input_file="obs.fil",
         selection="all",
         export_png=True,
     )
-    # First candidate fails hard; remaining candidates are skipped.
     assert any("waterfaller backend failed" in w for w in am.warnings)
-    assert any("skipped after prior backend failure" in w for w in am.warnings)
+    assert not any("skipped after prior backend failure" in w for w in am.warnings)
+    assert len(calls) == 5
+    assert len(list((am.run_dir / "waterfalls").glob("*.png"))) == 4
+
+
+def test_waterfall_retries_retryable_backend_failure(tmp_path: Path) -> None:
+    wf, calls = _retryable_failure_factory(tmp_path)
+    am = ArtifactManager(tmp_path / "outputs", _RID)
+    am.create_run()
+    generate_waterfalls(
+        _candidates()[:1],
+        am,
+        policy=ArtifactPolicy(),
+        options=ReportOptions(waterfall_window_sec=1.0),
+        waterfall_fn=wf,
+        input_file="obs.fil",
+        selection="all",
+        export_png=True,
+    )
+    assert len(calls) >= 2
+    assert calls[1] < calls[0]
+    assert any("retry succeeded with shorter window" in w for w in am.warnings)
+    assert len(list((am.run_dir / "waterfalls").glob("*.png"))) == 1
 
 
 # -- html_report_builder -------------------------------------------------------

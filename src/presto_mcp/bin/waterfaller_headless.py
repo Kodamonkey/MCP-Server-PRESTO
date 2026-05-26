@@ -8,6 +8,7 @@ Must be invoked inside the PRESTO Docker image (paths below are image-local).
 from __future__ import annotations
 
 import glob
+import json
 import os
 import runpy
 import shutil
@@ -26,6 +27,21 @@ from matplotlib.backend_bases import FigureCanvasBase
 
 OUTPUT = os.environ.get("WATERFALL_OUTPUT", "waterfall.png")
 _PSRFITS_EXTS = (".fits", ".sf", ".psrfits")
+_COMPAT_NOTES_PATH = "/outputs/artifacts/waterfaller_compat.json"
+_compat_notes: dict[str, object] = {
+    "compat_mode": False,
+    "psrfits_hotfix_applied": False,
+    "psrfits2fil_converted": False,
+    "converted_input_path": None,
+}
+
+
+def _write_compat_notes() -> None:
+    try:
+        with open(_COMPAT_NOTES_PATH, "w", encoding="utf-8") as fh:
+            json.dump(_compat_notes, fh, indent=2, sort_keys=True)
+    except OSError as exc:
+        print(f"[waterfaller_headless] compat notes write failed: {exc}", file=sys.stderr)
 
 
 def _resolve_waterfaller_script() -> str:
@@ -89,6 +105,7 @@ def _patch_psrfits_nchnoffs() -> None:
             print(f"[waterfaller_headless] psrfits hotfix write failed: {exc}", file=sys.stderr)
             return
         print(f"[waterfaller_headless] applied psrfits NCHNOFFS hotfix: {path}")
+        _compat_notes["psrfits_hotfix_applied"] = True
         return
 
 
@@ -134,6 +151,8 @@ def _maybe_convert_psrfits_input(argv: list[str]) -> list[str]:
 
     chosen = fil_hits[0]
     print(f"[waterfaller_headless] using converted filterbank: {chosen}")
+    _compat_notes["psrfits2fil_converted"] = True
+    _compat_notes["converted_input_path"] = chosen
     out = argv.copy()
     out[-1] = chosen
     return out
@@ -175,9 +194,15 @@ def _patch_matplotlib_cmap_compat() -> None:
 
 
 if __name__ == "__main__":
-    _patch_psrfits_nchnoffs()
+    # Default: preserve original PRESTO waterfaller behavior.
+    # Opt-in compat mode keeps historical MCP fallbacks.
+    compat_mode = os.environ.get("WATERFALLER_ENABLE_COMPAT_PATCHES", "").strip() == "1"
+    _compat_notes["compat_mode"] = compat_mode
+    if compat_mode:
+        _patch_psrfits_nchnoffs()
     _patch_canvas_window_title()
     _patch_matplotlib_cmap_compat()
-    tool_argv = _maybe_convert_psrfits_input(sys.argv[1:])
+    tool_argv = _maybe_convert_psrfits_input(sys.argv[1:]) if compat_mode else sys.argv[1:]
+    _write_compat_notes()
     sys.argv = [PRESTO_WATERFALLER, *tool_argv]
     runpy.run_path(PRESTO_WATERFALLER, run_name="__main__")

@@ -82,3 +82,64 @@ def test_waterfaller_rejects_huge_duration(settings: Settings) -> None:
             backend=backend, settings=settings,
             start_s=0.0, duration_s=99999.0, dm=10.0,
         )
+
+
+def test_waterfaller_accepts_runs_dir_input(settings: Settings) -> None:
+    """raw_file from RUNS_DIR (run artifact shape) resolves under /runs."""
+    set_resolved_container_python("python3")
+    prior_run = "20260101T000000Z-ABC234"
+    artifacts = settings.runs_dir / prior_run / "artifacts"
+    artifacts.mkdir(parents=True)
+    (artifacts / "downsampled.fil").write_bytes(b"FIL" * 64)
+
+    backend = FakeDockerBackend(
+        responses={
+            "python3": FakeResponse(
+                stdout="rendered\n",
+                status=RunStatus.SUCCESS,
+                artifacts={"waterfall.png": b"\x89PNG"},
+            )
+        }
+    )
+    result = run_waterfaller(
+        f"{prior_run}/artifacts/downsampled.fil",
+        backend=backend, settings=settings,
+        start_s=0.0, duration_s=0.5, dm=10.0,
+    )
+    assert result.status == RunStatus.SUCCESS
+    argv = backend.calls[0].invocation.argv
+    assert f"/runs/{prior_run}/artifacts/downsampled.fil" in argv
+
+
+def test_waterfaller_parses_compat_notes_sidecar(settings: Settings) -> None:
+    """waterfaller_compat.json from headless helper is surfaced in result."""
+    set_resolved_container_python("python3")
+    backend = FakeDockerBackend(
+        responses={
+            "python3": FakeResponse(
+                stdout="rendered\n",
+                status=RunStatus.SUCCESS,
+                artifacts={
+                    "waterfall.png": b"\x89PNG",
+                    "waterfaller_compat.json": (
+                        b'{"compat_mode": true, "psrfits_hotfix_applied": true, '
+                        b'"psrfits2fil_converted": true, '
+                        b'"converted_input_path": "/outputs/artifacts/x.fil"}'
+                    ),
+                },
+            )
+        }
+    )
+    result = run_waterfaller(
+        "raw.fil",
+        backend=backend, settings=settings,
+        start_s=0.0, duration_s=0.5, dm=10.0,
+    )
+    assert result.status == RunStatus.SUCCESS
+    assert result.result is not None
+    notes = result.result.compat_notes
+    assert notes is not None
+    assert notes.compat_mode is True
+    assert notes.psrfits_hotfix_applied is True
+    assert notes.psrfits2fil_converted is True
+    assert notes.converted_input_path == "/outputs/artifacts/x.fil"

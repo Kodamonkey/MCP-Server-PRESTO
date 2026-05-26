@@ -41,7 +41,8 @@ def run_make_spd(
 ) -> ToolRunResult[MakeSpdResult]:
     """``make_spd.py --groupsfile groups.txt [--mask --maskfile <mask>] -o <prefix> /data/raw <sp>...``.
 
-    * ``raw_file``: relative to ``DATA_DIR``.
+    * ``raw_file``: either relative to ``DATA_DIR`` or
+      ``<run_id>/artifacts/<file>`` from a prior run (auto-detected).
     * ``groups_file``: ``<run_id>/artifacts/<file>.txt`` relative to ``RUNS_DIR``.
     * ``singlepulse_files``: list of ``<run_id>/artifacts/<file>.singlepulse``.
     * ``mask_file`` (optional): either relative to ``DATA_DIR`` or
@@ -78,7 +79,7 @@ def run_make_spd(
             "groups_file name collides with a singlepulse filename"
         )
 
-    extras_list: list[ExtraInput] = [ExtraInput(path=raw_file, root="data")]
+    extras_list: list[ExtraInput] = [extra_input_for(raw_file)]
     if mask_file is not None:
         extras_list.append(extra_input_for(mask_file))
     extras = tuple(extras_list)
