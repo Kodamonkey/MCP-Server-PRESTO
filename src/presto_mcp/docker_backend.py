@@ -43,6 +43,7 @@ def build_invocation(
     stop_timeout_s: int = 5,
     runs_dir_ro: Path | None = None,
     workdir: str | None = None,
+    mount_data: bool = True,
 ) -> DockerInvocation:
     """Construct a :class:`DockerInvocation`. Pure function — no I/O.
 
@@ -52,6 +53,11 @@ def build_invocation(
     When ``runs_dir_ro`` is provided, an additional read-only mount at
     ``/runs`` is appended (used by pipeline tools that consume prior-run
     artifacts).
+
+    When ``mount_data`` is ``False``, the ``/data`` bind mount is skipped
+    (pure-compute tools like ``DDplan.py`` need no observation input). The
+    executor decides this based on whether any input or extra_input has
+    ``root="data"``.
     """
     if not container_name or " " in container_name:
         raise DockerInvocationError(f"invalid container_name: {container_name!r}")
@@ -60,7 +66,6 @@ def build_invocation(
     if not presto_argv:
         raise DockerInvocationError("presto_argv must be non-empty")
 
-    data_src = str(data_dir.resolve())
     run_src = str(run_dir.resolve())
 
     argv: list[str] = [
@@ -74,7 +79,13 @@ def build_invocation(
         f"--pids-limit={pids_limit}",
         "--security-opt", "no-new-privileges",
         f"--stop-timeout={stop_timeout_s}",
-        "--mount", f"type=bind,src={data_src},dst={CONTAINER_DATA_MOUNT},readonly",
+    ]
+    if mount_data:
+        data_src = str(data_dir.resolve())
+        argv += [
+            "--mount", f"type=bind,src={data_src},dst={CONTAINER_DATA_MOUNT},readonly",
+        ]
+    argv += [
         "--mount", f"type=bind,src={run_src},dst={CONTAINER_OUTPUT_MOUNT}",
     ]
     if runs_dir_ro is not None:

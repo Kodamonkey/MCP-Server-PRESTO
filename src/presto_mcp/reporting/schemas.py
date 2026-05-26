@@ -57,7 +57,21 @@ class Candidate(BaseModel):
     acceleration_or_z: float | None = None
     width_bins: int | None = None
     downfact: int | None = None
-    rank: int | None = None
+    rank: int | None = Field(
+        default=None,
+        description=(
+            "Report-assigned rank — global ordering by SNR/sigma within this "
+            "report bundle."
+        ),
+    )
+    native_rank: int | None = Field(
+        default=None,
+        description=(
+            "Upstream PRESTO rank preserved verbatim (e.g. rrattrap RRAT group "
+            "rank). None when source stage does not emit one. Never overwritten "
+            "by report-level ranking so trace-back to PRESTO outputs stays intact."
+        ),
+    )
     folded: bool = False
 
     classification_hint: str | None = None

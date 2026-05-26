@@ -188,8 +188,12 @@ def _patch_matplotlib_cmap_compat() -> None:
     for name in plt.colormaps():
         try:
             cmap_d[name] = matplotlib.colormaps[name]
-        except Exception:
-            continue
+        except Exception as exc:  # noqa: BLE001 - best-effort shim, log and move on
+            print(
+                f"[waterfaller_headless] skipping cmap {name!r}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
     cm.cmap_d = cmap_d  # type: ignore[attr-defined]
 
 

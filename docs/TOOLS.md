@@ -432,7 +432,7 @@ artifacts into a fresh `outputs/<run_id>/`.
 | `presto.export_candidates_csv` | `candidates.csv` — every parseable candidate |
 | `presto.generate_summary_json` | `summary.json` — observation + workflow summary |
 | `presto.generate_visual_artifacts` | `visuals/*.png` + `thumbnails/*.png` |
-| `presto.generate_candidate_waterfalls` | `waterfalls/<id>.png` (+ `.pdf`) — via the containerized waterfaller |
+| `presto.generate_candidate_waterfalls` | `waterfalls/<id>.png` (+ `.pdf`) — **quicklook only** via containerized waterfaller; for canonical single-pulse diagnostics use `make_spd` → `plot_spd` (.spd file is PRESTO's authoritative artifact) |
 | `presto.generate_report_html` | offline `report.html` |
 | `presto.generate_report_markdown` | `report.md` |
 | `presto.generate_modern_report_bundle` | the full bundle (intention-routed) |

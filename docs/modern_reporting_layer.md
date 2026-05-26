@@ -40,7 +40,7 @@ src/presto_mcp/reporting/
 | `presto.export_candidates_csv` | `candidates.csv` |
 | `presto.generate_summary_json` | `summary.json` |
 | `presto.generate_visual_artifacts` | `visuals/*.png` + `thumbnails/*.png` |
-| `presto.generate_candidate_waterfalls` | `waterfalls/<id>.png` (+ `.pdf`) |
+| `presto.generate_candidate_waterfalls` | `waterfalls/<id>.png` (+ `.pdf`) — **quicklook only**, not a canonical single-pulse diagnostic (see note below) |
 | `presto.generate_report_html` | `report.html` (+ summary, csv, visuals) |
 | `presto.generate_report_markdown` | `report.md` |
 | `presto.generate_modern_report_bundle` | the full bundle (intention-routed) |
@@ -52,6 +52,22 @@ PRESTO except `generate_candidate_waterfalls`, which reuses the **containerized*
 
 `generate_modern_report_bundle` is the preferred tool for any "modern report",
 "HTML report", "dashboard" or "full bundle" request.
+
+### Quicklook vs. canonical single-pulse diagnostic
+
+`presto.generate_candidate_waterfalls` is a **bulk quicklook**. It picks
+``(start, duration, dm)`` windows from a candidate table (DM/SNR filters,
+top-N) and invokes the low-level `presto.waterfaller` for each one. Useful
+for triaging many events, but the selection logic is MCP-side, not PRESTO's
+diagnostic semantics.
+
+For a canonical single-pulse diagnostic of one candidate, prefer the PRESTO
+chain `single_pulse_search → rrattrap → make_spd → plot_spd`. The `.spd`
+file produced by `make_spd` is PRESTO's authoritative single-pulse artifact;
+`plot_spd` renders the full diagnostic (waterfall + sub-band view + DM-time
+plot + profile). When `.spd` files are present in the supplied `run_ids`,
+`generate_modern_report_bundle` will surface the plot_spd output instead of
+the quicklook.
 
 ## Candidate sources
 

@@ -110,7 +110,14 @@ def run_generate_candidate_waterfalls(
     export_png: bool = True,
     export_pdf: bool = False,
 ) -> ReportToolResult:
-    """Render per-candidate waterfall diagnostics (PNG, optional PDF).
+    """Render per-candidate waterfall **quicklook** (PNG, optional PDF).
+
+    .. warning::
+       This is an MCP-side quicklook for bulk triage. Candidate selection
+       (top-N / DM / SNR / window) is MCP logic, not PRESTO single-pulse
+       diagnostic semantics. For a canonical single-pulse diagnostic, use
+       ``make_spd`` → ``plot_spd`` instead. The ``.spd`` file is PRESTO's
+       authoritative single-pulse artifact.
 
     ``colour_map`` is canonical (matches PRESTO upstream ``--colour-map``).
     ``color_map`` is accepted as a deprecated alias.

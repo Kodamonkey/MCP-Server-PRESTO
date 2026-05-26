@@ -256,6 +256,32 @@ class PlotSpdResult(BaseModel):
     png_file: str | None = None
 
 
+class SinglePulseDiagnosticStage(BaseModel):
+    """One stage of the composite single-pulse diagnostic workflow."""
+
+    stage: Literal["single_pulse_search", "rrattrap", "make_spd", "plot_spd"]
+    run_id: str
+    status: RunStatus
+    error: str | None = None
+
+
+class SinglePulseDiagnosticResult(BaseModel):
+    """Composite result of the canonical PRESTO single-pulse diagnostic chain.
+
+    Stages run in order: ``single_pulse_search → rrattrap → make_spd → plot_spd``.
+    Each stage's run_id is preserved so the caller can inspect intermediates.
+    ``spd_files`` enumerates the canonical PRESTO single-pulse artifacts produced
+    by ``make_spd``; ``plot_pngs`` are the diagnostic plots rendered by
+    ``plot_spd`` for each ``.spd`` file.
+    """
+
+    stages: list[SinglePulseDiagnosticStage] = Field(default_factory=list)
+    singlepulse_files: list[str] = Field(default_factory=list)
+    groups_file: str | None = None
+    spd_files: list[str] = Field(default_factory=list)
+    plot_pngs: list[str] = Field(default_factory=list)
+
+
 class WaterfallerCompatNotes(BaseModel):
     """Audit trail for non-default behavior applied by waterfaller_headless.
 

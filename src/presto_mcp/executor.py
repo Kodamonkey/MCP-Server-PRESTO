@@ -219,6 +219,10 @@ def _prepare_run(
     needs_runs_mount = spec.input_root == "runs" or any(
         ex.root == "runs" for ex in spec.extra_inputs
     )
+    needs_data_mount = (
+        (spec.input_file is not None and spec.input_root == "data")
+        or any(ex.root == "data" for ex in spec.extra_inputs)
+    )
 
     invocation = build_invocation(
         image=settings.image,
@@ -230,6 +234,7 @@ def _prepare_run(
         container_name=container_name,
         runs_dir_ro=settings.runs_dir if needs_runs_mount else None,
         workdir=spec.container_workdir,
+        mount_data=needs_data_mount,
     )
     return _PreparedRun(
         spec=spec,

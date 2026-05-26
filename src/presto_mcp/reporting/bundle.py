@@ -265,30 +265,46 @@ def generate_bundle(
 
     # 3. per-candidate waterfalls
     if policy.export_waterfall_png or policy.export_waterfall_pdf:
-        _run_waterfalls(
-            roots,
-            candidates,
-            am,
-            policy=policy,
-            options=options,
-            settings=settings,
-            backend=backend,
-            input_file=input_file,
-            tool_name=tool_name,
-            selection=waterfall_selection,
-            top_n=waterfall_top_n,
-            candidate_id=waterfall_candidate_id,
-            min_snr=waterfall_min_snr,
-            min_dm=waterfall_min_dm,
-            max_dm=waterfall_max_dm,
-            window_sec=waterfall_window_sec,
-        )
-        _step(
-            tracker,
-            "generate candidate waterfalls",
-            tool="presto_waterfaller",
-            notes=f"{len(am.artifacts_of(ReportArtifactKind.WATERFALL_PNG))} PNG",
-        )
+        # Prefer canonical PRESTO single-pulse diagnostics (.spd / plot_spd) when
+        # they exist in the supplied roots — these are PRESTO's authoritative
+        # output and outrank the MCP-side waterfaller quicklook.
+        spd_published = _publish_existing_spd_plots(roots, am, tool_name)
+        if spd_published > 0:
+            am.add_warning(
+                f"surfaced {spd_published} canonical plot_spd diagnostic(s); "
+                "MCP-side waterfaller quicklook was skipped because .spd output exists"
+            )
+            _step(
+                tracker,
+                "surface canonical plot_spd diagnostics",
+                tool="presto_plot_spd",
+                notes=f"{spd_published} PNG",
+            )
+        else:
+            _run_waterfalls(
+                roots,
+                candidates,
+                am,
+                policy=policy,
+                options=options,
+                settings=settings,
+                backend=backend,
+                input_file=input_file,
+                tool_name=tool_name,
+                selection=waterfall_selection,
+                top_n=waterfall_top_n,
+                candidate_id=waterfall_candidate_id,
+                min_snr=waterfall_min_snr,
+                min_dm=waterfall_min_dm,
+                max_dm=waterfall_max_dm,
+                window_sec=waterfall_window_sec,
+            )
+            _step(
+                tracker,
+                "generate candidate waterfalls",
+                tool="presto_waterfaller",
+                notes=f"{len(am.artifacts_of(ReportArtifactKind.WATERFALL_PNG))} PNG",
+            )
 
     # 4. per-candidate JSON (when a report or waterfalls are produced)
     if policy.export_report_html or policy.export_waterfall_png:
@@ -458,6 +474,71 @@ def _run_waterfalls(
         export_pdf=policy.export_waterfall_pdf,
         created_by_tool=tool_name,
     )
+
+
+def _publish_existing_spd_plots(
+    roots: list[Path],
+    am: ArtifactManager,
+    tool_name: str,
+) -> int:
+    """Surface plot_spd PNGs from supplied roots as canonical single-pulse diagnostics.
+
+    Returns the number of canonical diagnostics published. PRESTO's
+    authoritative single-pulse diagnostic is ``plot_spd`` output (rendered
+    from a ``.spd`` file produced by ``make_spd``). When such PNGs are
+    present in any of the supplied ``run_ids`` we publish them with the
+    ``WATERFALL_PNG`` kind so they appear in the report bundle in place of
+    the MCP-side waterfaller quicklook.
+
+    A root is treated as a plot_spd source if it contains either:
+      * an ``artifacts/*.spd`` file (it was a make_spd run, with rendered PNGs
+        next to the SPD), or
+      * a ``manifest.json`` whose ``tool`` is ``plot_spd``.
+
+    PNGs found alongside are published as
+    ``waterfalls/spd-<run_id>-<basename>.png``.
+    """
+    seen_names: set[str] = set()
+    published = 0
+    for root in roots:
+        if not root.is_dir():
+            continue
+        artifacts = root / "artifacts"
+        if not artifacts.is_dir():
+            continue
+
+        manifest_tool = ""
+        manifest_path = root / "manifest.json"
+        if manifest_path.is_file():
+            try:
+                mdata = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest_tool = str(mdata.get("tool", ""))
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        has_spd = any(artifacts.glob("*.spd"))
+        if not (manifest_tool == "plot_spd" or has_spd):
+            continue
+
+        for png in sorted(artifacts.glob("*.png")):
+            if png.name in seen_names:
+                continue
+            seen_names.add(png.name)
+            rel = f"waterfalls/spd-{root.name}-{png.stem}.png"
+            try:
+                am.publish_file(
+                    png,
+                    ReportArtifactKind.WATERFALL_PNG,
+                    rel,
+                    created_by_tool=tool_name,
+                    description="canonical single-pulse diagnostic (plot_spd)",
+                )
+                published += 1
+            except Exception as e:  # noqa: BLE001
+                am.add_warning(
+                    f"could not publish plot_spd PNG {png.name}: {e}"
+                )
+    return published
 
 
 def _write_candidate_jsons(

@@ -91,6 +91,9 @@ TOOL_METADATA: dict[str, ToolMeta] = {
         "single_pulse", ("raw", "groups", "singlepulse"), ("spd",)
     ),
     "plot_spd": ToolMeta("single_pulse", ("spd",), ("plot",)),
+    "single_pulse_diagnostic": ToolMeta(
+        "single_pulse", ("dat", "inf", "raw"), ("spd", "plot")
+    ),
     "waterfaller": ToolMeta("single_pulse", ("raw",), ("plot",)),
     # folding QC
     "pfd2png": ToolMeta("fold_qc", ("pfd",), ("plot",), default_visible=False),
@@ -170,6 +173,7 @@ PROFILES: dict[str, frozenset[str]] = {
         "rrattrap",
         "make_spd",
         "plot_spd",
+        "single_pulse_diagnostic",
         "waterfaller",
     },
     "review_qc": _CORE

@@ -48,6 +48,7 @@ from .models import (
     SearchBinResult,
     SiftingResult,
     SimpleZapbirdsResult,
+    SinglePulseDiagnosticResult,
     SinglePulseSearchResult,
     StackSearchResult,
     SumProfilesResult,
@@ -98,6 +99,7 @@ from .tools.rrattrap import run_rrattrap
 from .tools.search_bin import run_search_bin
 from .tools.sifting import run_sifting
 from .tools.simple_zapbirds import run_simple_zapbirds
+from .tools.single_pulse_diagnostic import run_single_pulse_diagnostic
 from .tools.single_pulse_search import run_single_pulse_search
 from .tools.stacksearch import run_stacksearch
 from .tools.sum_profiles import run_sum_profiles
@@ -920,6 +922,153 @@ def register_tools(
             settings=_settings_for_tools(),
             background=background,
         )
+
+
+    @tool(
+        name="presto.single_pulse_diagnostic",
+        description=(
+            "Run PRESTO's canonical single-pulse diagnostic chain end-to-end: "
+            "single_pulse_search -> rrattrap -> make_spd -> plot_spd. Each stage "
+            "runs as a separate PRESTO invocation with its own run_id and manifest. "
+            "Returns a typed result enumerating per-stage run_ids, the surviving "
+            ".spd files (PRESTO's authoritative single-pulse artifact), and the "
+            "plot_spd PNGs. Prefer this over the MCP-side waterfaller quicklook "
+            "when the goal is a canonical single-pulse diagnostic. The workflow "
+            "short-circuits on the first failing stage."
+        ),
+    )
+    async def presto_single_pulse_diagnostic(
+        dat_files: Annotated[
+            list[str],
+            Field(
+                description=(
+                    "List of <run_id>/artifacts/<file>.dat paths from "
+                    "prepdata/prepsubband."
+                ),
+            ),
+        ],
+        inf_file: Annotated[
+            str,
+            Field(description="<run_id>/artifacts/<file>.inf matching the .dat files."),
+        ],
+        raw_file: Annotated[
+            str,
+            Field(
+                description=(
+                    "Original observation; either relative to DATA_DIR or "
+                    "'<run_id>/artifacts/<file>' (auto-detected)."
+                ),
+            ),
+        ],
+        mask_file: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Optional rfifind .mask file. Either relative to DATA_DIR or "
+                    "'<run_id>/artifacts/<file>.mask' from a prior rfifind run. "
+                    "Required when apply_mask is true."
+                ),
+            ),
+        ] = None,
+        apply_mask: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="Forwarded to make_spd --mask (requires mask_file).",
+            ),
+        ] = False,
+        threshold: Annotated[
+            float,
+            Field(
+                default=5.0,
+                description="single_pulse_search sigma threshold.",
+            ),
+        ] = 5.0,
+        max_width_s: Annotated[
+            float,
+            Field(
+                default=0.1,
+                description="single_pulse_search maximum pulse width (s).",
+            ),
+        ] = 0.1,
+        min_group: Annotated[
+            int | None,
+            Field(
+                default=None,
+                description="rrattrap minimum group size.",
+            ),
+        ] = None,
+        use_dm_plan: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="rrattrap --use-DMplan flag.",
+            ),
+        ] = False,
+        just_waterfall: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="Forwarded to plot_spd --just-waterfall.",
+            ),
+        ] = False,
+        max_spd_plots: Annotated[
+            int,
+            Field(
+                default=10,
+                ge=0,
+                le=1000,
+                description=(
+                    "Maximum number of .spd files to plot (each plot is its own "
+                    "PRESTO invocation). 0 skips the plot_spd stage entirely."
+                ),
+            ),
+        ] = 10,
+    ) -> ToolRunResult[SinglePulseDiagnosticResult]:
+        def _go() -> ToolRunResult[SinglePulseDiagnosticResult]:
+            result, status = run_single_pulse_diagnostic(
+                dat_files=dat_files,
+                inf_file=inf_file,
+                raw_file=raw_file,
+                backend=_backend_for_tools(),
+                mask_file=mask_file,
+                apply_mask=apply_mask,
+                threshold=threshold,
+                max_width_s=max_width_s,
+                min_group=min_group,
+                use_dm_plan=use_dm_plan,
+                just_waterfall=just_waterfall,
+                max_spd_plots=max_spd_plots,
+                settings=_settings_for_tools(),
+            )
+            # The composite tool has no single run_id of its own; surface the
+            # first stage's run_id when available so observability can still
+            # cross-link, and aggregate per-stage errors into the envelope.
+            first_run = result.stages[0].run_id if result.stages else ""
+            errors = [
+                f"{s.stage}({s.run_id}): {s.error}"
+                for s in result.stages
+                if s.error
+            ]
+            return ToolRunResult[SinglePulseDiagnosticResult](
+                run_id=first_run,
+                status=status,
+                result=result,
+                manifest_uri=(
+                    f"presto://runs/{first_run}/manifest" if first_run else ""
+                ),
+                stdout_uri=(
+                    f"presto://runs/{first_run}/stdout" if first_run else ""
+                ),
+                stderr_uri=(
+                    f"presto://runs/{first_run}/stderr" if first_run else ""
+                ),
+                artifact_uris=[],
+                error="; ".join(errors) or None,
+            )
+
+        return await asyncio.to_thread(_go)
 
 
     @tool(
@@ -1850,10 +1999,12 @@ def register_tools(
     @tool(
         name="presto.generate_candidate_waterfalls",
         description=(
-            "Generate PNG and/or PDF waterfall diagnostics for selected, top-N, or "
-            "all candidates/events. Use this when the user asks for waterfalls, event "
-            "plots, FRB-like diagnostics, per-candidate visual inspection, or "
-            "per-candidate PDFs. Rendering runs through the containerized PRESTO "
+            "QUICKLOOK ONLY — bulk-render per-candidate waterfall PNGs/PDFs for fast "
+            "triage of many events. Event selection (top-N / DM / SNR / time window) "
+            "is MCP-side, NOT PRESTO's canonical single-pulse diagnostic semantics. "
+            "For a canonical single-pulse diagnostic of a specific candidate, prefer "
+            "the make_spd -> plot_spd chain (.spd file is PRESTO's authoritative "
+            "single-pulse artifact). Rendering runs through the containerized PRESTO "
             "waterfaller. Defaults: colour map inferno, PNG on, PDF off, top-N "
             "selection. input_file is the original observation relative to DATA_DIR."
         ),

@@ -26,7 +26,11 @@ def backend_and_settings():
         backend = DockerBackend()
     except DockerInvocationError as e:
         pytest.skip(str(e))
-    return backend, get_settings()
+    s = get_settings()
+    # ddplan is pure-compute: the executor skips the /data mount when no
+    # input is needed, and create_run_dir auto-creates runs_dir. No extra
+    # filesystem setup required, even on fresh CI checkouts.
+    return backend, s
 
 
 def test_e2e_ddplan(backend_and_settings) -> None:

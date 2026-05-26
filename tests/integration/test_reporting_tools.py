@@ -175,6 +175,44 @@ def test_generate_candidate_waterfalls_writes_html_bundle(synthetic) -> None:
     )
 
 
+def test_spd_outputs_preempt_waterfaller_quicklook(synthetic) -> None:
+    """When a make_spd / plot_spd run exists in roots, its PNG is published
+    instead of running the MCP-side waterfaller quicklook."""
+    spd_run = "20260101T000001Z-DEF567"
+    spd_artifacts = synthetic.runs_dir / spd_run / "artifacts"
+    spd_artifacts.mkdir(parents=True, exist_ok=True)
+    (spd_artifacts / "cand_DM42_t12_RANK1.spd").write_bytes(b"SPD")
+    (spd_artifacts / "cand_DM42_t12_RANK1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    # Minimal manifest so resolve_roots accepts the run
+    (synthetic.runs_dir / spd_run / "manifest.json").write_text(
+        json.dumps({"tool": "make_spd", "status": "SUCCESS"}),
+        encoding="utf-8",
+    )
+
+    backend = FakeDockerBackend(
+        responses={
+            "python3": FakeResponse(
+                stdout="rendered\n",
+                artifacts={"waterfall.png": b"\x89PNG\r\n\x1a\n"},
+            )
+        }
+    )
+    result = run_generate_candidate_waterfalls(
+        run_ids=[_RID, spd_run],
+        input_file="obs.fil",
+        settings=synthetic,
+        backend=backend,
+        top_n=1,
+        export_png=True,
+    )
+    out = Path(result.output_dir)
+    # plot_spd PNG was published as canonical waterfall artifact
+    spd_published = list(out.glob("waterfalls/spd-*.png"))
+    assert spd_published, "expected at least one published spd-* waterfall"
+    # MCP-side waterfaller was NOT invoked (no docker calls)
+    assert backend.calls == [], "waterfaller quicklook must be skipped when .spd exists"
+
+
 def test_generate_candidate_waterfalls_accepts_color_map_alias(synthetic) -> None:
     """Deprecated American-spelling alias still works."""
     (synthetic.runs_dir / _RID / "artifacts" / "obs_rfifind.mask").write_bytes(b"MASK")

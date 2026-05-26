@@ -77,6 +77,22 @@ def test_argv_data_readonly_run_rw(dirs: tuple[Path, Path]) -> None:
     assert not out_mount.endswith(",readonly"), out_mount
 
 
+def test_argv_omits_data_mount_when_not_requested(dirs: tuple[Path, Path]) -> None:
+    """Pure-compute tools (no observation input) skip the /data bind mount."""
+    data, run = dirs
+    inv = build_invocation(
+        image="i:t", presto_argv=["DDplan.py", "-l", "0", "-d", "50"],
+        data_dir=data, run_dir=run,
+        cpus=1.0, memory_mb=512, container_name="c",
+        mount_data=False,
+    )
+    mounts = [a for a in inv.argv if a.startswith("type=bind")]
+    # Only /outputs is mounted; /data is absent
+    assert len(mounts) == 1
+    assert ",dst=/outputs" in mounts[0]
+    assert all(",dst=/data," not in a for a in inv.argv)
+
+
 def test_argv_pids_no_new_privileges(dirs: tuple[Path, Path]) -> None:
     data, run = dirs
     inv = build_invocation(
