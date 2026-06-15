@@ -17,6 +17,7 @@ from pathlib import Path
 from .errors import ManifestError
 from .models import RunManifest, RunStatus, RunSummary
 from .path_security import ensure_inside_root, is_run_id
+from .run_label import run_label
 
 log = logging.getLogger("presto_mcp.manifest")
 
@@ -111,10 +112,13 @@ def list_run_summaries(runs_root: Path, *, limit: int | None = None) -> list[Run
             log.warning("skipping unreadable manifest %s: %s", run_id, e)
             continue
         m = with_stale_status(m)
+        input_file = m.inputs.get("input_file")
         summaries.append(
             RunSummary(
                 run_id=m.run_id,
                 tool=m.tool,
+                label=m.label or run_label(m.tool, m.inputs),
+                input_file=input_file,
                 status=m.status,
                 started_at=m.started_at,
                 duration_s=m.duration_s,

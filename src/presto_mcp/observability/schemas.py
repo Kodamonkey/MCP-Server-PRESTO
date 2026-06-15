@@ -110,6 +110,7 @@ class StatusRow(BaseModel):
     tool: str | None = None
     run_id: str
     tool_call_id: str | None = None
+    input: str | None = None
     status: str = "queued"
     duration_s: float | None = None
     notes: str | None = None

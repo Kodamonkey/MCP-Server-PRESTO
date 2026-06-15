@@ -8,8 +8,8 @@ from .event_types import status_symbol
 from .schemas import StatusRow
 
 _HEADER = (
-    "| Step | Tool | Run ID | Tool Call ID | Status | Duration | Notes |\n"
-    "|---|---|---|---|---|---|---|\n"
+    "| Step | Tool | Input | Status | Duration | Notes |\n"
+    "|---|---|---|---|---|---|\n"
 )
 
 
@@ -46,8 +46,7 @@ def render_status_md(run_id: str, rows: list[StatusRow]) -> str:
                 [
                     _cell(row.step),
                     _cell(row.tool),
-                    _cell(row.run_id),
-                    _cell(row.tool_call_id),
+                    _cell(row.input),
                     status_cell,
                     _duration(row.duration_s),
                     _cell(row.notes),
@@ -56,7 +55,7 @@ def render_status_md(run_id: str, rows: list[StatusRow]) -> str:
             + " |"
         )
     if not rows:
-        lines.append("| _no steps recorded yet_ |  |  |  |  |  |  |")
+        lines.append("| _no steps recorded yet_ |  |  |  |  |  |")
     lines.append("")
     return "\n".join(lines)
 

@@ -85,6 +85,7 @@ class RunManifest(BaseModel):
     cpus: float
     memory_mb: int
     resource_usage: ResourceUsage | None = None
+    label: str | None = None
 
     stdout_path: str = "stdout.log"
     stderr_path: str = "stderr.log"
@@ -337,6 +338,8 @@ class RunSummary(BaseModel):
 
     run_id: str
     tool: str
+    label: str | None = None
+    input_file: str | None = None
     status: RunStatus
     started_at: datetime
     duration_s: float | None = None

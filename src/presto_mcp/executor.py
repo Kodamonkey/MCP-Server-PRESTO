@@ -39,6 +39,8 @@ from .path_security import (
     resolve_input_path,
     resolve_run_artifact,
 )
+from .run_index import write_run_index
+from .run_label import run_label
 
 log = logging.getLogger("presto_mcp.executor")
 
@@ -321,6 +323,7 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
         cpus=spec.cpus,
         memory_mb=spec.memory_mb,
         resource_usage=_resource_usage(backend_result, spec.memory_mb),
+        label=run_label(spec.tool_name, prepared.inputs_log),
         artifacts=artifacts,
         error=(parse_error or backend_result.error),
     )
@@ -342,6 +345,7 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
         )
 
     manifest_uri, stdout_uri, stderr_uri, artifact_uris = _result_uris(run_id, artifacts)
+    write_run_index(prepared.settings.runs_dir)
     _log_presto_command(manifest, backend_result)
     log.info(
         "done %s run_id=%s status=%s %.1fs",
@@ -408,10 +412,12 @@ def execute(
         container_inputs=prepared.container_inputs,
         cpus=spec.cpus,
         memory_mb=spec.memory_mb,
+        label=run_label(spec.tool_name, prepared.inputs_log),
         artifacts=[],
         error=None,
     )
     write_manifest(prepared.run_dir, running)
+    write_run_index(settings.runs_dir)
 
     thread = threading.Thread(
         target=_background_worker,
@@ -472,6 +478,7 @@ def _write_background_failure(prepared: _PreparedRun[T], exc: Exception) -> None
         container_inputs=prepared.container_inputs,
         cpus=prepared.spec.cpus,
         memory_mb=prepared.spec.memory_mb,
+        label=run_label(prepared.spec.tool_name, prepared.inputs_log),
         artifacts=artifacts,
         error=f"background run failed: {type(exc).__name__}: {exc}",
     )
@@ -480,6 +487,7 @@ def _write_background_failure(prepared: _PreparedRun[T], exc: Exception) -> None
     except ManifestError:
         log.exception("could not write background failure manifest for %s", prepared.run_id)
         return
+    write_run_index(prepared.settings.runs_dir)
     _log_presto_command(manifest, None)
 
 

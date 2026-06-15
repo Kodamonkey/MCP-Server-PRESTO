@@ -15,6 +15,7 @@ events to the connected client when supported.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import traceback as _tb
 from collections.abc import Callable
@@ -27,6 +28,57 @@ from .event_types import EventType
 from .logging_config import LoggingSettings
 from .redaction import redact_text, redact_value
 from .schemas import LogEvent
+
+log = logging.getLogger("presto_mcp.observability.structured_logger")
+
+# Matches a server-session log file: server-<run_id>.<ext>[.<rotation>].
+_SESSION_FILE_RE = re.compile(r"^server-(\d{8}T\d{6}Z-[A-Z2-7]{6})\.")
+
+
+def prune_server_logs(
+    log_dir: Path, keep: int, *, current_session_id: str | None = None
+) -> int:
+    """Delete oldest ``server-<session>.*`` file groups, keeping newest ``keep``.
+
+    Never touches ``latest.*`` and always preserves ``current_session_id``.
+    Returns the number of files deleted. Best-effort: swallows its own errors.
+    """
+    try:
+        server_dir = Path(log_dir) / "server"
+        if not server_dir.is_dir():
+            return 0
+        groups: dict[str, list[Path]] = {}
+        mtimes: dict[str, float] = {}
+        for p in server_dir.iterdir():
+            if not p.is_file():
+                continue
+            m = _SESSION_FILE_RE.match(p.name)  # skips latest.* automatically
+            if not m:
+                continue
+            sid = m.group(1)
+            groups.setdefault(sid, []).append(p)
+            try:
+                mtimes[sid] = max(mtimes.get(sid, 0.0), p.stat().st_mtime)
+            except OSError:
+                continue
+        ordered = sorted(groups, key=lambda s: mtimes.get(s, 0.0), reverse=True)
+        keep_ids = set(ordered[: max(0, keep)])
+        if current_session_id:
+            keep_ids.add(current_session_id)
+        deleted = 0
+        for sid in ordered:
+            if sid in keep_ids:
+                continue
+            for p in groups[sid]:
+                try:
+                    p.unlink()
+                    deleted += 1
+                except OSError:
+                    log.debug("could not delete old log %s", p)
+        return deleted
+    except Exception:  # noqa: BLE001 - log pruning must never break startup
+        log.warning("server log pruning failed", exc_info=True)
+        return 0
 
 _LEVELS = {
     "DEBUG": logging.DEBUG,
@@ -214,6 +266,12 @@ def init_structured_logger(
     global _LOGGER
     with _INIT_LOCK:
         _LOGGER = StructuredLogger(settings, server_session_id=server_session_id)
+    # Prune AFTER the current session's files exist so it is always retained.
+    prune_server_logs(
+        settings.log_dir,
+        settings.retention_count,
+        current_session_id=_LOGGER.server_session_id,
+    )
     return _LOGGER
 
 
@@ -233,5 +291,6 @@ __all__ = [
     "StructuredLogger",
     "get_structured_logger",
     "init_structured_logger",
+    "prune_server_logs",
     "reset_structured_logger",
 ]
