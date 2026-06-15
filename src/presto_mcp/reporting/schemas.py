@@ -225,6 +225,7 @@ class RunReportSummary(BaseModel):
     artifact_policy: ArtifactPolicy
 
     total_runtime_sec: float | None = None
+    peak_memory_mb: float | None = None
     warning_count: int = 0
     error_count: int = 0
     logs_available: bool = False

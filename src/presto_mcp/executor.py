@@ -27,6 +27,7 @@ from .models import (
     BackendResult,
     DockerInvocation,
     ReadfileMetadata,
+    ResourceUsage,
     RfifindSummary,
     RunManifest,
     RunStatus,
@@ -138,6 +139,19 @@ def _persist_logs(run_dir: Path, result: BackendResult) -> tuple[str, str]:
     stdout_path.write_text(result.stdout, encoding="utf-8", errors="replace")
     stderr_path.write_text(result.stderr, encoding="utf-8", errors="replace")
     return stdout_path.name, stderr_path.name
+
+
+def _resource_usage(result: BackendResult, memory_limit_mb: int) -> ResourceUsage | None:
+    """Build a :class:`ResourceUsage` from a backend result, or None if unsampled."""
+    if result.resource_samples <= 0:
+        return None
+    return ResourceUsage(
+        peak_memory_mb=result.peak_memory_mb,
+        memory_limit_mb=memory_limit_mb,
+        cpu_percent_peak=result.cpu_percent_peak,
+        cpu_percent_avg=result.cpu_percent_avg,
+        samples=result.resource_samples,
+    )
 
 
 def _collect_artifacts(run_dir: Path) -> list[str]:
@@ -306,6 +320,7 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
         container_inputs=prepared.container_inputs,
         cpus=spec.cpus,
         memory_mb=spec.memory_mb,
+        resource_usage=_resource_usage(backend_result, spec.memory_mb),
         artifacts=artifacts,
         error=(parse_error or backend_result.error),
     )
@@ -499,6 +514,9 @@ def _log_presto_command(manifest: RunManifest, backend_result: BackendResult | N
             "stdout_path": manifest.stdout_path,
             "stderr_path": manifest.stderr_path,
         }
+        if manifest.resource_usage is not None:
+            meta["peak_memory_mb"] = manifest.resource_usage.peak_memory_mb
+            meta["cpu_percent_avg"] = manifest.resource_usage.cpu_percent_avg
         if backend_result is not None:
             meta["stdout_tail"] = summarize_stream(backend_result.stdout, max_tail_lines=40)
             meta["stderr_tail"] = summarize_stream(backend_result.stderr, max_tail_lines=40)

@@ -325,6 +325,73 @@ def test_execute_background_backend_exception_finalizes_failed_manifest(
     assert "daemon unavailable" in final.error
 
 
+class MetricsBackend:
+    """Backend that reports resource metrics on its ``BackendResult``."""
+
+    def run(self, invocation: DockerInvocation, timeout_s: int) -> BackendResult:  # noqa: ARG002
+        return BackendResult(
+            status=RunStatus.SUCCESS,
+            exit_code=0,
+            stdout="ok",
+            stderr="",
+            duration_s=0.1,
+            peak_memory_mb=512.5,
+            cpu_percent_peak=180.0,
+            cpu_percent_avg=95.0,
+            resource_samples=3,
+        )
+
+    def inspect_image_digest(self, image: str) -> str | None:  # noqa: ARG002
+        return None
+
+
+def test_execute_persists_resource_usage(settings: Settings) -> None:
+    spec = RunSpec[ReadfileMetadata](
+        tool_name="readfile",
+        input_file="sample.fil",
+        inputs_extra={},
+        container_input_path="/data/sample.fil",
+        presto_argv_builder=_readfile_argv,
+        parser=_readfile_parser,
+        timeout_s=60,
+        cpus=2.0,
+        memory_mb=1024,
+    )
+
+    result = execute(spec, settings, MetricsBackend())
+    assert result.status == RunStatus.SUCCESS
+
+    m = load_manifest(settings.runs_dir / result.run_id)
+    assert m.resource_usage is not None
+    assert m.resource_usage.peak_memory_mb == 512.5
+    assert m.resource_usage.cpu_percent_peak == 180.0
+    assert m.resource_usage.cpu_percent_avg == 95.0
+    assert m.resource_usage.memory_limit_mb == 1024
+    assert m.resource_usage.samples == 3
+
+
+def test_execute_no_samples_leaves_resource_usage_none(settings: Settings) -> None:
+    """FakeDockerBackend reports zero samples → manifest omits resource_usage."""
+    backend = FakeDockerBackend(
+        responses={"readfile": FakeResponse(stdout="ok", status=RunStatus.SUCCESS)}
+    )
+    spec = RunSpec[ReadfileMetadata](
+        tool_name="readfile",
+        input_file="sample.fil",
+        inputs_extra={},
+        container_input_path="/data/sample.fil",
+        presto_argv_builder=_readfile_argv,
+        parser=_readfile_parser,
+        timeout_s=60,
+        cpus=2.0,
+        memory_mb=1024,
+    )
+
+    result = execute(spec, settings, backend)
+    m = load_manifest(settings.runs_dir / result.run_id)
+    assert m.resource_usage is None
+
+
 class CountingBackend:
     def __init__(self) -> None:
         self.active = 0
