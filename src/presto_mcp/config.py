@@ -208,6 +208,29 @@ def find_cloud_placeholder_files(data_dir: Path) -> list[Path]:
     return placeholders
 
 
+def warn_if_oversubscribed(s: Settings) -> str | None:
+    """Warn when promised vCPUs (runs × cpus/run) exceed the host CPU count.
+
+    ``max_concurrent_runs`` and ``default_cpus`` are independent knobs; with the
+    defaults (2 × 4) the server promises 8 vCPUs regardless of the host. Emits a
+    ``log.warning`` and returns the message when oversubscribed, else ``None``.
+    """
+    cpu_count = os.cpu_count()
+    if not cpu_count:
+        return None
+    requested = s.max_concurrent_runs * s.default_cpus
+    if requested <= cpu_count:
+        return None
+    msg = (
+        f"concurrency may oversubscribe CPU: max_concurrent_runs="
+        f"{s.max_concurrent_runs} x default_cpus={s.default_cpus} = "
+        f"{requested:g} vCPUs requested but host has {cpu_count}. Lower "
+        f"PRESTO_MAX_CONCURRENT_RUNS or PRESTO_DEFAULT_CPUS to avoid contention."
+    )
+    log.warning(msg)
+    return msg
+
+
 class HealthCheckError(RuntimeError):
     """Startup health check failed; server must not boot."""
 
@@ -269,6 +292,8 @@ def run_health_check(s: Settings, docker_bin: str | None = None) -> None:
       * ``docker`` is on PATH and the daemon responds to ``docker info``.
       * ``PRESTO_IMAGE`` is present locally (optional auto-``docker pull`` on start).
     """
+    warn_if_oversubscribed(s)
+
     if s.skip_healthcheck:
         log.warning("health check skipped (PRESTO_SKIP_HEALTHCHECK=true)")
         return

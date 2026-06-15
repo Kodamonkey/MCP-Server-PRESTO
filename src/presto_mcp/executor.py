@@ -27,6 +27,7 @@ from .models import (
     BackendResult,
     DockerInvocation,
     ReadfileMetadata,
+    ResourceUsage,
     RfifindSummary,
     RunManifest,
     RunStatus,
@@ -38,6 +39,8 @@ from .path_security import (
     resolve_input_path,
     resolve_run_artifact,
 )
+from .run_index import write_run_index
+from .run_label import run_label
 
 log = logging.getLogger("presto_mcp.executor")
 
@@ -138,6 +141,19 @@ def _persist_logs(run_dir: Path, result: BackendResult) -> tuple[str, str]:
     stdout_path.write_text(result.stdout, encoding="utf-8", errors="replace")
     stderr_path.write_text(result.stderr, encoding="utf-8", errors="replace")
     return stdout_path.name, stderr_path.name
+
+
+def _resource_usage(result: BackendResult, memory_limit_mb: int) -> ResourceUsage | None:
+    """Build a :class:`ResourceUsage` from a backend result, or None if unsampled."""
+    if result.resource_samples <= 0:
+        return None
+    return ResourceUsage(
+        peak_memory_mb=result.peak_memory_mb,
+        memory_limit_mb=memory_limit_mb,
+        cpu_percent_peak=result.cpu_percent_peak,
+        cpu_percent_avg=result.cpu_percent_avg,
+        samples=result.resource_samples,
+    )
 
 
 def _collect_artifacts(run_dir: Path) -> list[str]:
@@ -306,6 +322,8 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
         container_inputs=prepared.container_inputs,
         cpus=spec.cpus,
         memory_mb=spec.memory_mb,
+        resource_usage=_resource_usage(backend_result, spec.memory_mb),
+        label=run_label(spec.tool_name, prepared.inputs_log),
         artifacts=artifacts,
         error=(parse_error or backend_result.error),
     )
@@ -327,6 +345,7 @@ def _run_to_completion(prepared: _PreparedRun[T]) -> ToolRunResult[T]:
         )
 
     manifest_uri, stdout_uri, stderr_uri, artifact_uris = _result_uris(run_id, artifacts)
+    write_run_index(prepared.settings.runs_dir)
     _log_presto_command(manifest, backend_result)
     log.info(
         "done %s run_id=%s status=%s %.1fs",
@@ -393,10 +412,12 @@ def execute(
         container_inputs=prepared.container_inputs,
         cpus=spec.cpus,
         memory_mb=spec.memory_mb,
+        label=run_label(spec.tool_name, prepared.inputs_log),
         artifacts=[],
         error=None,
     )
     write_manifest(prepared.run_dir, running)
+    write_run_index(settings.runs_dir)
 
     thread = threading.Thread(
         target=_background_worker,
@@ -457,6 +478,7 @@ def _write_background_failure(prepared: _PreparedRun[T], exc: Exception) -> None
         container_inputs=prepared.container_inputs,
         cpus=prepared.spec.cpus,
         memory_mb=prepared.spec.memory_mb,
+        label=run_label(prepared.spec.tool_name, prepared.inputs_log),
         artifacts=artifacts,
         error=f"background run failed: {type(exc).__name__}: {exc}",
     )
@@ -465,6 +487,7 @@ def _write_background_failure(prepared: _PreparedRun[T], exc: Exception) -> None
     except ManifestError:
         log.exception("could not write background failure manifest for %s", prepared.run_id)
         return
+    write_run_index(prepared.settings.runs_dir)
     _log_presto_command(manifest, None)
 
 
@@ -499,6 +522,9 @@ def _log_presto_command(manifest: RunManifest, backend_result: BackendResult | N
             "stdout_path": manifest.stdout_path,
             "stderr_path": manifest.stderr_path,
         }
+        if manifest.resource_usage is not None:
+            meta["peak_memory_mb"] = manifest.resource_usage.peak_memory_mb
+            meta["cpu_percent_avg"] = manifest.resource_usage.cpu_percent_avg
         if backend_result is not None:
             meta["stdout_tail"] = summarize_stream(backend_result.stdout, max_tail_lines=40)
             meta["stderr_tail"] = summarize_stream(backend_result.stderr, max_tail_lines=40)

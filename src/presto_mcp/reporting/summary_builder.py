@@ -66,6 +66,7 @@ def build_summary(
     total_runtime = sum(
         float(m["duration_s"]) for m in manifests if isinstance(m.get("duration_s"), int | float)
     )
+    peak_memory = _peak_memory_mb(manifests)
 
     if input_file is None:
         input_file = _first_input_file(manifests)
@@ -97,6 +98,7 @@ def build_summary(
         failed_tools=failed_tools,
         artifact_policy=policy,
         total_runtime_sec=round(total_runtime, 3) if total_runtime else None,
+        peak_memory_mb=peak_memory,
         warning_count=len(warnings),
         error_count=len(errors),
         logs_available=logs_available,
@@ -139,6 +141,18 @@ def _scan_run_manifests(roots: list[Path]) -> list[dict]:
             if isinstance(data, dict) and data.get("tool") and "artifact_policy" not in data:
                 out.append(data)
     return out
+
+
+def _peak_memory_mb(manifests: list[dict]) -> float | None:
+    """Max ``resource_usage.peak_memory_mb`` across per-tool manifests (None if absent)."""
+    peaks: list[float] = []
+    for m in manifests:
+        usage = m.get("resource_usage")
+        if isinstance(usage, dict):
+            val = usage.get("peak_memory_mb")
+            if isinstance(val, int | float):
+                peaks.append(float(val))
+    return round(max(peaks), 1) if peaks else None
 
 
 def _first_input_file(manifests: list[dict]) -> str | None:

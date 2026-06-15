@@ -41,6 +41,23 @@ class DockerInvocation(BaseModel):
     network: Literal["none"] = "none"
 
 
+class ResourceUsage(BaseModel):
+    """Best-effort container resource metrics sampled during a run.
+
+    All fields are optional and populated only when ``docker stats`` sampling
+    succeeded at least once. Memory is reported in MiB (matching docker's
+    ``--memory`` unit); ``cpu_percent_*`` can exceed 100 on multi-core hosts.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    peak_memory_mb: float | None = None
+    memory_limit_mb: int | None = None
+    cpu_percent_peak: float | None = None
+    cpu_percent_avg: float | None = None
+    samples: int = 0
+
+
 class RunManifest(BaseModel):
     """On-disk manifest persisted at ``runs/<run_id>/manifest.json``."""
 
@@ -67,6 +84,8 @@ class RunManifest(BaseModel):
 
     cpus: float
     memory_mb: int
+    resource_usage: ResourceUsage | None = None
+    label: str | None = None
 
     stdout_path: str = "stdout.log"
     stderr_path: str = "stderr.log"
@@ -319,6 +338,8 @@ class RunSummary(BaseModel):
 
     run_id: str
     tool: str
+    label: str | None = None
+    input_file: str | None = None
     status: RunStatus
     started_at: datetime
     duration_s: float | None = None
@@ -358,6 +379,13 @@ class BackendResult(BaseModel):
     stderr: str
     duration_s: float
     error: str | None = None
+
+    # Best-effort resource metrics sampled via ``docker stats`` (None when
+    # sampling was unavailable; never affects run success/failure).
+    peak_memory_mb: float | None = None
+    cpu_percent_peak: float | None = None
+    cpu_percent_avg: float | None = None
+    resource_samples: int = 0
 
 
 # -- Utility / navigation models (capabilities layer) ---------------------------

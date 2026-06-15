@@ -89,19 +89,27 @@ class ToolCallContext:
         self.workflow_run_id: str | None = None
         self.tracker = None
 
-        if workflow_run_id and is_run_id(workflow_run_id):
-            self.workflow_run_id = workflow_run_id
+        if workflow_run_id and not is_run_id(workflow_run_id):
+            log.warning("ignoring malformed workflow_run_id: %r", workflow_run_id)
+            workflow_run_id = None
+
+        # Fall back to the server session id so EVERY call lands in a
+        # logs/runs/<id>/ timeline, even without a client-supplied workflow id.
+        effective = workflow_run_id
+        if effective is None and self.slog is not None:
+            effective = self.slog.server_session_id
+
+        if effective and is_run_id(effective):
+            self.workflow_run_id = effective
             try:
                 self.tracker = get_or_create_tracker(
-                    workflow_run_id,
+                    effective,
                     _logging_settings(),
                     structured_logger=self.slog,
-                    workflow_name=workflow_run_id,
+                    workflow_name=effective,
                 )
             except Exception as e:  # noqa: BLE001 - tracking must never break a call
                 log.warning("could not create run tracker: %s", e)
-        elif workflow_run_id:
-            log.warning("ignoring malformed workflow_run_id: %r", workflow_run_id)
 
         if self.slog is not None:
             self.slog.log_event(

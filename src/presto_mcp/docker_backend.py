@@ -11,8 +11,10 @@ PRESTO container. It also owns timeout-kill semantics.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Protocol
@@ -26,6 +28,22 @@ CONTAINER_DATA_MOUNT = "/data"
 CONTAINER_OUTPUT_MOUNT = "/outputs"
 CONTAINER_RUNS_MOUNT = "/runs"
 DIAGNOSTIC_EXCERPT_CHARS = 1200
+
+# How often the resource sampler polls ``docker stats`` while a container runs.
+STATS_POLL_INTERVAL_S = 2.0
+# Per-poll timeout for the ``docker stats`` call itself.
+STATS_CALL_TIMEOUT_S = 5
+_STATS_FORMAT = "{{.MemUsage}}|{{.CPUPerc}}"
+_MEM_UNIT_TO_MIB = {
+    "B": 1.0 / (1024 * 1024),
+    "KIB": 1.0 / 1024,
+    "KB": 1000.0 / (1024 * 1024),
+    "MIB": 1.0,
+    "MB": 1000.0 * 1000.0 / (1024 * 1024),
+    "GIB": 1024.0,
+    "GB": 1000.0 * 1000.0 * 1000.0 / (1024 * 1024),
+    "TIB": 1024.0 * 1024.0,
+}
 
 
 def build_invocation(
@@ -123,6 +141,130 @@ class BackendProtocol(Protocol):
     def inspect_image_digest(self, image: str) -> str | None: ...
 
 
+def _parse_mem_to_mib(raw: str) -> float | None:
+    """Convert a docker-stats memory token (e.g. ``"123.4MiB"``) to MiB.
+
+    Returns ``None`` for unparseable / placeholder (``--``) tokens.
+    """
+    raw = raw.strip()
+    if not raw or raw == "--":
+        return None
+    m = re.match(r"^([0-9]*\.?[0-9]+)\s*([A-Za-z]+)$", raw)
+    if not m:
+        return None
+    factor = _MEM_UNIT_TO_MIB.get(m.group(2).upper())
+    if factor is None:
+        return None
+    return float(m.group(1)) * factor
+
+
+def _parse_cpu_perc(raw: str) -> float | None:
+    """Parse a docker-stats CPU token (e.g. ``"45.20%"``) to a float percent."""
+    raw = raw.strip().rstrip("%").strip()
+    if not raw or raw == "--":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def parse_stats_line(line: str) -> tuple[float | None, float | None]:
+    """Parse one ``MemUsage|CPUPerc`` stats line → ``(mem_used_mib, cpu_percent)``.
+
+    ``MemUsage`` arrives as ``"<used> / <limit>"``; only the used side is taken.
+    """
+    if "|" not in line:
+        return None, None
+    mem_part, _, cpu_part = line.partition("|")
+    mem_used = mem_part.split("/")[0]
+    return _parse_mem_to_mib(mem_used), _parse_cpu_perc(cpu_part)
+
+
+class _ResourceSampler:
+    """Polls ``docker stats`` for one container in a daemon thread.
+
+    Best-effort: every failure is swallowed so sampling can never break a run.
+    ``summary()`` returns the metrics accumulated so far (zero samples when
+    stats were never available — e.g. a container that exits faster than one
+    poll interval, which keeps fast unit tests free of stats subprocess calls).
+    """
+
+    def __init__(
+        self,
+        docker_bin: str,
+        container_name: str,
+        interval_s: float = STATS_POLL_INTERVAL_S,
+    ) -> None:
+        self._docker_bin = docker_bin
+        self._name = container_name
+        self._interval = interval_s
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._peak_mem_mib: float | None = None
+        self._cpu_samples: list[float] = []
+        self._samples = 0
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._loop, name=f"stats-{self._name}", daemon=True
+        )
+        self._thread.start()
+
+    def _loop(self) -> None:
+        # wait() returns True once stopped; waiting *before* the first poll means
+        # a container finishing within one interval yields zero samples.
+        while not self._stop.wait(self._interval):
+            self._sample_once()
+
+    def _sample_once(self) -> None:
+        try:
+            cp = subprocess.run(
+                [
+                    self._docker_bin, "stats", "--no-stream",
+                    "--format", _STATS_FORMAT, self._name,
+                ],
+                shell=False,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=STATS_CALL_TIMEOUT_S,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001 - sampling must never break a run
+            return
+        if cp.returncode != 0:
+            return
+        mem_mib, cpu = parse_stats_line((cp.stdout or "").strip())
+        if mem_mib is not None:
+            self._peak_mem_mib = (
+                mem_mib if self._peak_mem_mib is None else max(self._peak_mem_mib, mem_mib)
+            )
+        if cpu is not None:
+            self._cpu_samples.append(cpu)
+        if mem_mib is not None or cpu is not None:
+            self._samples += 1
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=STATS_CALL_TIMEOUT_S + 1)
+            self._thread = None
+
+    def summary(self) -> dict[str, float | int | None]:
+        """Metrics dict whose keys match the ``BackendResult`` metric fields."""
+        cpu_peak = max(self._cpu_samples) if self._cpu_samples else None
+        cpu_avg = (
+            sum(self._cpu_samples) / len(self._cpu_samples) if self._cpu_samples else None
+        )
+        return {
+            "peak_memory_mb": round(self._peak_mem_mib, 1) if self._peak_mem_mib is not None else None,
+            "cpu_percent_peak": round(cpu_peak, 2) if cpu_peak is not None else None,
+            "cpu_percent_avg": round(cpu_avg, 2) if cpu_avg is not None else None,
+            "resource_samples": self._samples,
+        }
+
+
 class DockerBackend:
     """Real Docker backend. Uses ``subprocess.run(..., shell=False)`` exclusively."""
 
@@ -141,6 +283,8 @@ class DockerBackend:
 
         log.info("docker start %s", invocation.container_name)
 
+        sampler = _ResourceSampler(self.docker_bin, invocation.container_name)
+        sampler.start()
         started = time.monotonic()
         try:
             cp = subprocess.run(
@@ -153,6 +297,7 @@ class DockerBackend:
                 check=False,
             )
         except subprocess.TimeoutExpired as e:
+            sampler.stop()
             duration = time.monotonic() - started
             log.warning("timeout after %.1fs; killing %s", duration, invocation.container_name)
             self._kill_container(invocation.container_name)
@@ -163,9 +308,13 @@ class DockerBackend:
                 stderr=(e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")),
                 duration_s=duration,
                 error=f"timed out after {timeout_s}s",
+                **sampler.summary(),
             )
         except FileNotFoundError as e:
+            sampler.stop()
             raise DockerInvocationError(f"docker binary not found: {e}") from e
+        finally:
+            sampler.stop()
 
         duration = time.monotonic() - started
         status = RunStatus.SUCCESS if cp.returncode == 0 else RunStatus.FAILED
@@ -193,6 +342,7 @@ class DockerBackend:
             error=_failure_error(cp.returncode, stdout, stderr)
             if status == RunStatus.FAILED
             else None,
+            **sampler.summary(),
         )
 
     def _kill_container(self, name: str) -> None:

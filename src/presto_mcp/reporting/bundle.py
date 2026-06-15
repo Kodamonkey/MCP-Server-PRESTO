@@ -25,10 +25,12 @@ from ..observability.logging_config import load_logging_settings
 from ..observability.run_tracker import RunTracker
 from ..observability.structured_logger import get_structured_logger
 from ..path_security import ensure_inside_root, is_run_id, new_run_id
+from ..run_label import report_bundle_dirname
 from .artifact_manager import ArtifactManager
 from .candidate_parser import candidates_to_csv, parse_candidates
 from .html_report_builder import build_html
 from .markdown_report_builder import build_markdown
+from .output_index import write_output_index
 from .schemas import (
     Artifact,
     ArtifactPolicy,
@@ -227,7 +229,8 @@ def generate_bundle(
     roots = resolve_roots(run_ids, workdir, settings)
 
     run_id = new_run_id()
-    am = ArtifactManager(settings.outputs_dir, run_id)
+    bundle_dir = report_bundle_dirname(input_file, generated_at.strftime("%Y%m%dT%H%M%SZ"))
+    am = ArtifactManager(settings.outputs_dir, bundle_dir)
     am.create_run()
 
     tracker = _make_tracker(run_id, tool_name)
@@ -405,6 +408,8 @@ def generate_bundle(
     manifest.errors = list(am.errors)
     manifest.status = summary.status
     am.write_manifest(manifest)
+
+    write_output_index(settings.outputs_dir)
 
     return ReportToolResult(
         run_id=run_id,

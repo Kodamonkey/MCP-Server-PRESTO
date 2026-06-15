@@ -34,6 +34,7 @@ class LoggingSettings:
     rotate_logs: bool = True
     max_bytes: int = 10_485_760
     backup_count: int = 10
+    retention_count: int = 10
     capture_stdout_stderr: bool = True
     stdout_stderr_max_tail_lines: int = 80
     redact_sensitive_values: bool = True
@@ -56,6 +57,17 @@ def _env_bool(env: dict[str, str], name: str, default: bool) -> bool:
     return default
 
 
+def _env_int(env: dict[str, str], name: str, default: int, *, minimum: int) -> int:
+    raw = env.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else minimum
+
+
 def load_logging_settings(
     repo_root: Path,
     *,
@@ -76,12 +88,15 @@ def load_logging_settings(
     if level not in _VALID_LEVELS:
         level = "INFO"
 
+    retention = _env_int(env, "PRESTO_MCP_LOG_RETENTION", 10, minimum=1)
+
     return LoggingSettings(
         log_dir=log_dir,
         level=level,
         jsonl_enabled=_env_bool(env, "PRESTO_MCP_JSON_LOGS", True),
         live_status_enabled=_env_bool(env, "PRESTO_MCP_LIVE_STATUS", True),
         capture_stdout_stderr=_env_bool(env, "PRESTO_MCP_CAPTURE_STDOUT_STDERR", True),
+        retention_count=retention,
     )
 
 
